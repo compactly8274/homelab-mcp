@@ -17,6 +17,15 @@ dependencies = [
     "python-dotenv>=1.0,<2.0",
 ]
 
+[project.optional-dependencies]
+# Kept for back-compat with older uv that doesn't recognize
+# PEP 735 [dependency-groups]. Newer uv should use `uv sync --group dev`.
+dev = [
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.24,<1.0",
+    "ruff>=0.6,<1.0",
+]
+
 [dependency-groups]
 # PEP 735: dev dependencies. Newer uv versions prefer this over
 # project.optional-dependencies. We keep both for back-compat with

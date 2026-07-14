@@ -29,7 +29,12 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
       - name: Sync dependencies
-        run: uv sync --extra dev
+        # Newer uv (>=0.5) reads dev deps from [dependency-groups].dev
+        # (PEP 735). Older uv reads from [project.optional-dependencies].dev.
+        # We have the former, so the canonical command is `uv sync --group dev`.
+        # We add `--extra dev` for back-compat with older uv that doesn't
+        # recognize --group.
+        run: uv sync --group dev --extra dev
       - name: Lint
         run: uv run ruff check .
       - name: Test
