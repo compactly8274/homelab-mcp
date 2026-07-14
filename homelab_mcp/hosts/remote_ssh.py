@@ -1,0 +1,233 @@
+"""``RemoteSSH``: docker-over-SSH backend.
+
+Talks to a remote host's docker daemon by shelling out via the user's
+SSH config (an alias like ``unraid`` or ``truenas``). Used for any host
+that isn't the one the daemon is running on.
+
+The container inspect output is normalized to the same shape that
+:class:`~homelab_mcp.hosts.local_docker.LocalDocker` returns so the
+downstream tool surface doesn't care which backend produced the data.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import shlex
+import time
+from pathlib import Path
+from typing import Any
+
+import asyncssh
+
+from homelab_mcp.hosts.base import CommandResult
+
+
+_SSH_TIMEOUT_S = 15.0
+_SSH_QUIET = True  # suppress banner / motd in stdout
+
+
+class RemoteSSH:
+    """A host backend that runs docker commands over SSH.
+
+    The SSH connection is established lazily on the first command and
+    reused for the lifetime of the instance. We don't pool connections
+    across instances — each tool call gets its own ``RemoteSSH``.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        ssh_alias: str,
+        ssh_config_path: str | Path,
+        verify_config: bool = True,
+    ) -> None:
+        if not name:
+            raise ValueError("RemoteSSH requires a non-empty name")
+        if not ssh_alias:
+            raise ValueError("RemoteSSH requires a non-empty ssh_alias")
+        if not ssh_config_path:
+            raise ValueError("RemoteSSH requires a non-empty ssh_config_path")
+        self._name = name
+        self._alias = ssh_alias
+        self._config_path = Path(ssh_config_path).expanduser()
+        if verify_config:
+            if not self._config_path.is_file():
+                raise FileNotFoundError(f"ssh config not found: {self._config_path}")
+        self._conn: asyncssh.SSHClientConnection | None = None
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def _connect(self) -> asyncssh.SSHClientConnection:
+        if self._conn is None or self._conn.is_closed:
+            self._conn = await asyncssh.connect(
+                self._alias,
+                config_path=str(self._config_path),
+                known_hosts=None,  # use ~/.ssh/known_hosts by default
+            )
+        return self._conn
+
+    async def _run(self, command: str, timeout: float = _SSH_TIMEOUT_S) -> CommandResult:
+        """Run a shell command on the remote host. Returns CommandResult."""
+        conn = await self._connect()
+        t0 = time.monotonic()
+        try:
+            completed = await asyncio.wait_for(
+                conn.run(command, check=False, stderr=asyncssh.PIPE),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return CommandResult(124, "", f"timeout after {timeout}s",
+                                 int((time.monotonic() - t0) * 1000))
+        except (OSError, asyncssh.Error) as e:
+            return CommandResult(1, "", f"{type(e).__name__}: {e}",
+                                 int((time.monotonic() - t0) * 1000))
+        return CommandResult(
+            completed.exit_code or 0,
+            completed.stdout or "",
+            completed.stderr or "",
+            int((time.monotonic() - t0) * 1000),
+        )
+
+    async def aclose(self) -> None:
+        if self._conn is not None and not self._conn.is_closed:
+            self._conn.close()
+            await self._conn.wait_closed()
+        self._conn = None
+
+    # -- containers ---------------------------------------------------------
+
+    async def list_containers(self, all: bool = True) -> list[dict[str, Any]]:
+        """List containers via a flat ``docker ps`` format.
+
+        Uses ``{{.Label "key"}}`` to fetch specific labels without the
+        comma-joined-string problem. We pull the four labels that matter
+        for stack detection plus the four basic identity fields.
+        """
+        tmpl = (
+            "NAME={{.Names}}"
+            "\tIMAGE={{.Image}}"
+            "\tSTATE={{.State}}"
+            "\tSTATUS={{.Status}}"
+            "\tID={{.ID}}"
+            "\tPROJECT={{.Label \"com.docker.compose.project\"}}"
+            "\tSERVICE={{.Label \"com.docker.compose.service\"}}"
+            "\tWORKDIR={{.Label \"com.docker.compose.project.working_dir\"}}"
+            "\tCONFIGFILES={{.Label \"com.docker.compose.project.config_files\"}}"
+        )
+        cmd = f"docker ps --format '{tmpl}' {'--all' if all else ''}"
+        r = await self._run(cmd, timeout=30.0)
+        if not r.ok:
+            return []
+        out: list[dict[str, Any]] = []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 9:
+                continue
+            out.append({
+                "NAME": parts[0],
+                "IMAGE": parts[1],
+                "STATE": parts[2],
+                "STATUS": parts[3],
+                "ID": parts[4],
+                "PROJECT": parts[5],
+                "SERVICE": parts[6],
+                "WORKDIR": parts[7],
+                "CONFIGFILES": parts[8],
+            })
+        return out
+
+    async def inspect_container(self, name: str) -> dict[str, Any]:
+        r = await self._run(f"docker inspect {shlex.quote(name)}", timeout=15.0)
+        if not r.ok:
+            raise KeyError(f"container {name!r} not found on host {self._name}: {r.stderr.strip()[:200]}")
+        try:
+            data = json.loads(r.stdout)
+        except Exception as e:
+            raise KeyError(f"docker inspect returned non-JSON: {e}") from e
+        if isinstance(data, list) and data:
+            return data[0]
+        raise KeyError(f"container {name!r} not found on host {self._name}")
+
+    async def container_logs(self, name: str, tail: int = 200) -> str:
+        r = await self._run(
+            f"docker logs --tail {int(tail)} --timestamps=false {shlex.quote(name)}",
+            timeout=30.0,
+        )
+        return r.stdout if r.ok else r.stderr
+
+    async def events(self, since_seconds: int = 300) -> list[dict[str, Any]]:
+        r = await self._run(
+            f"docker events --since {int(since_seconds)}s --format '{{{{json .}}}}'",
+            timeout=15.0,
+        )
+        out: list[dict[str, Any]] = []
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                continue
+        return out
+
+    async def list_stacks(self) -> list[dict[str, Any]]:
+        cs = await self.list_containers(all=True)
+        by_project: dict[str, dict[str, Any]] = {}
+        singles: list[dict[str, Any]] = []
+        for c in cs:
+            project = c.get("PROJECT", "")
+            if project:
+                stack = by_project.setdefault(project, {
+                    "name": project,
+                    "host": self._name,
+                    "managed_by": "compose",
+                    "services": [],
+                    "workdir": c.get("WORKDIR", ""),
+                })
+                service = c.get("SERVICE")
+                if service and service not in stack["services"]:
+                    stack["services"].append(service)
+            else:
+                singles.append({
+                    "name": c.get("NAME", ""),
+                    "host": self._name,
+                    "managed_by": "single",
+                    "image": c.get("IMAGE", ""),
+                    "state": c.get("STATE", ""),
+                })
+        stacks = list(by_project.values()) + singles
+        stacks.sort(key=lambda s: s["name"])
+        return stacks
+
+    async def compose_pull(self, stack_dir: str) -> CommandResult:
+        if not stack_dir or not stack_dir.strip():
+            return CommandResult(2, "", "stack_dir is empty", 0)
+        # Check the path exists remotely before invoking compose.
+        check = await self._run(f"test -d {shlex.quote(stack_dir)}", timeout=5.0)
+        if not check.ok:
+            return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
+        return await self._run(
+            f"cd {shlex.quote(stack_dir)} && docker compose pull", timeout=300.0
+        )
+
+    async def compose_up(self, stack_dir: str) -> CommandResult:
+        if not stack_dir or not stack_dir.strip():
+            return CommandResult(2, "", "stack_dir is empty", 0)
+        check = await self._run(f"test -d {shlex.quote(stack_dir)}", timeout=5.0)
+        if not check.ok:
+            return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
+        return await self._run(
+            f"cd {shlex.quote(stack_dir)} && docker compose up -d", timeout=300.0
+        )
+
+    async def container_action(self, name: str, action: str) -> CommandResult:
+        if action not in ("start", "stop", "restart", "kill", "pause", "unpause"):
+            return CommandResult(2, "", f"unsupported action: {action}", 0)
+        return await self._run(f"docker {action} {shlex.quote(name)}", timeout=30.0)
+
+    async def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
+        return await self._run(command, timeout=timeout)
