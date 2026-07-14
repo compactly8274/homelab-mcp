@@ -31,6 +31,16 @@ homelab-mcp = "homelab_mcp.__main__:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv]
+# Pin the venv to .venv/ to match the .gitignore and the README's
+# quick-start. Contributors don't have to set UV_PROJECT_ENVIRONMENT.
+project = "."
+dev-dependencies = [
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.24,<1.0",
+    "ruff>=0.6,<1.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["homelab_mcp"]
 

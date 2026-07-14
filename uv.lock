@@ -238,6 +238,13 @@ dev = [
     { name = "ruff" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20,<1.0" },
@@ -253,6 +260,13 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6,<1.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3,<9.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24,<1.0" },
+    { name = "ruff", specifier = ">=0.6,<1.0" },
+]
 
 [[package]]
 name = "httpcore"

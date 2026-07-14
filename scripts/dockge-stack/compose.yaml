@@ -1,0 +1,47 @@
+version: "3.9"
+
+# homelab-mcp Dockge stack for TrueNAS (the "main hub" config).
+#
+# When this stack runs, the daemon uses LocalDocker for the TrueNAS
+# socket and RemoteSSH for Unraid + any other downstream hosts.
+#
+# Set HOMELAB_MCP_HOSTS to include the local alias ('truenas') plus
+# the downstream hosts you want managed from here.
+
+services:
+  homelab-mcp:
+    image: ${IMAGE:-ghcr.io/your-org/homelab-mcp:latest}
+    container_name: homelab-mcp
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/Data/appdata/homelab-mcp:/data
+      - /root/.ssh/config:/root/.ssh/config:ro
+    environment:
+      HOMELAB_MCP_HOSTS: ${HOMELAB_MCP_HOSTS:-["truenas","unraid"]}
+      HOMELAB_MCP_PORT: ${HOMELAB_MCP_PORT:-18790}
+      HOMELAB_MCP_STATE_DIR: /data
+      HOMELAB_MCP_POLL_ENABLED: ${HOMELAB_MCP_POLL_ENABLED:-true}
+      HOMELAB_MCP_POLL_INTERVAL: ${HOMELAB_MCP_POLL_INTERVAL:-21600}
+      HOMELAB_MCP_NTFY_URL: ${HOMELAB_MCP_NTFY_URL:-https://ntfy.sh/}
+      HOMELAB_MCP_NTFY_TOPIC: ${HOMELAB_MCP_NTFY_TOPIC:-}
+      HOMELAB_MCP_NTFY_PRIORITY: ${HOMELAB_MCP_NTFY_PRIORITY:-default}
+      HOMELAB_MCP_LLM_ENDPOINT: ${HOMELAB_MCP_LLM_ENDPOINT:-http://localhost:11434/v1/chat/completions}
+      HOMELAB_MCP_LLM_API_KEY: ${HOMELAB_MCP_LLM_API_KEY:-}
+      HOMELAB_MCP_LLM_MODEL: ${HOMELAB_MCP_LLM_MODEL:-}
+      HOMELAB_MCP_LLM_TIMEOUT: ${HOMELAB_MCP_LLM_TIMEOUT:-30}
+      HOMELAB_MCP_AUTO_APPLY_POLICY: ${HOMELAB_MCP_AUTO_APPLY_POLICY:-safe-and-caution}
+      HOMELAB_MCP_LOCAL_HOST_ALIAS: ${HOMELAB_MCP_LOCAL_HOST_ALIAS:-truenas}
+      HOMELAB_MCP_DOCKGE_STACKS_ROOT: ${HOMELAB_MCP_DOCKGE_STACKS_ROOT:-/mnt/Data/appdata/dockge/stacks}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://127.0.0.1:18790/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
