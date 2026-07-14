@@ -12,4 +12,4 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "env-test-2"
+      - run: echo "test step"
