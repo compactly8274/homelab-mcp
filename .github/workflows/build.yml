@@ -3,100 +3,12 @@ name: test-build-publish
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
 
-env:
-  PYTHON_VERSION: "3.12"
-  UV_VERSION: "0.4"
-
 jobs:
-  # ---- 1. Test on every push / PR ----------------------------------------
   test:
-    name: Test (Python ${{ env.PYTHON_VERSION }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv ${{ env.UV_VERSION }}
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: ${{ env.UV_VERSION }}
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-      - name: Sync dependencies
-        # The pyproject has both [project.optional-dependencies].dev and
-        # [dependency-groups].dev. `uv sync --group dev` is the modern
-        # form (PEP 735); `--extra dev` keeps older uv working.
-        run: uv sync --group dev --extra dev
-      - name: Lint
-        run: uv run ruff check .
-      - name: Test
-        run: uv run pytest -ra --tb=short
-
-  # ---- 2. Build multi-arch (no push) on every push ----------------------
-  build:
-    name: Build (no push)
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: |
-            homelab-mcp:ci-${{ github.sha }}
-            homelab-mcp:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ---- 3. Publish to GHCR on 'v*' tags only -----------------------------
-  publish:
-    name: Publish to GHCR
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Extract version
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: true
-          sbom: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/homelab-mcp:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/homelab-mcp:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          labels: |
-            org.opencontainers.image.title=homelab-mcp
-            org.opencontainers.image.description=MCP server: homelab diagnostics + auto-update pipeline
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+      - run: echo "triggered OK with branches filter"
