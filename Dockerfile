@@ -10,7 +10,7 @@
 #
 
 ARG PYTHON_VERSION=3.12
-ARG UV_VERSION=0.4
+ARG UV_VERSION=0.5.7
 
 # -- builder ---------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS builder

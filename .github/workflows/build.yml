@@ -9,7 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: "3.12"
-  UV_VERSION: "0.4"
+  UV_VERSION: "0.5.7"
 
 jobs:
   test:
