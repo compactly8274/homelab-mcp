@@ -11,7 +11,6 @@ from homelab_mcp.hosts.base import CommandResult, HostClient
 from homelab_mcp.state import State
 from homelab_mcp.updater.snapshot import StackSnapshot, stack_dir_of
 
-
 log = logging.getLogger(__name__)
 
 
@@ -105,7 +104,7 @@ async def apply_update(
             "error": f"no stack_dir resolved for {stack} on {host.name}; cannot apply",
         }
 
-    compose_text, compose_hash = await _async_read_compose(host, stack_dir)
+    _compose_text, compose_hash = await _async_read_compose(host, stack_dir)
     pull = await host.compose_pull(stack_dir)
     if not pull.ok:
         return {

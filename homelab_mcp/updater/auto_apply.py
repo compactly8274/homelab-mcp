@@ -23,14 +23,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Protocol
 
 from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
 from homelab_mcp.updater.notifier import Notifier
 from homelab_mcp.updater.release_notes import ReleaseNotes
 from homelab_mcp.updater.risk import RiskVerdict
-
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +188,7 @@ async def evaluate_and_act(
         }
 
     if verdict.risk == "SAFE":
-        action = "applied"
+        pass
     else:  # CAUTION
         if policy == "safe-only":
             await _notify_caution(
@@ -202,7 +201,6 @@ async def evaluate_and_act(
                 "notes_source": notes.source if notes else "",
                 "stack_dir": stack_dir,
             }
-        action = "applied"
 
     # 4. Apply.
     if not inputs.to_digest:

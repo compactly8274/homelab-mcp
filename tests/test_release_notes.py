@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import pytest
-
 from homelab_mcp.updater.release_notes import (
-    ReleaseNotes,
     fetch_release_notes,
     image_to_github_repo,
     is_probable_github_repo,
 )
-
 
 # -- image_to_github_repo --------------------------------------------------
 

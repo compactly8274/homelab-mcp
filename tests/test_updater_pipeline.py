@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, patch
-
-import pytest
 
 from homelab_mcp.hosts.base import CommandResult
 from homelab_mcp.state import State
@@ -22,7 +16,6 @@ from homelab_mcp.updater.snapshot import (
     _resolve_stack_dir,
     snapshot_stack,
 )
-
 
 # -- _resolve_stack_dir ----------------------------------------------------
 

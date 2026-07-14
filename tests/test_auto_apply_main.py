@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from homelab_mcp.auto_apply_main import (
-    main,
     parse_args,
     run_one_cycle,
     summarize,
 )
-
 
 # -- parse_args ------------------------------------------------------------
 

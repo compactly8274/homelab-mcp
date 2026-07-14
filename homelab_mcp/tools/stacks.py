@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from homelab_mcp.server import get_host, mcp
-from homelab_mcp.state import State
 from homelab_mcp.tools._state import get_state
 
 log = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ async def list_stacks_tool(host: str | None = None) -> list[dict[str, Any]]:
     or a single un-managed container. Each entry has ``name``, ``host``,
     ``managed_by``, and either ``services`` (compose) or ``image`` (single).
     """
-    state: State = get_state()
+    get_state()
     from homelab_mcp.server import _host_clients
     targets = {host: _host_clients[host]} if host else dict(_host_clients)
     out: list[dict[str, Any]] = []
@@ -41,7 +40,7 @@ async def stack_status_tool(host: str, stack: str) -> dict[str, Any]:
     matching = [c for c in containers if c.get("NAME") == stack or c.get("PROJECT") == stack]
     if not matching:
         return {"host": host, "stack": stack, "found": False}
-    state: State = get_state()
+    get_state()
     out_rows: list[dict[str, Any]] = []
     for c in matching:
         try:

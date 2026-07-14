@@ -1,0 +1,83 @@
+# homelab-mcp containerized stack.
+#
+# Two services:
+#   - homelab-mcp   : the long-running MCP server (SSE on 18790)
+#   - homelab-apply : the auto-apply cron, run via an external host cron
+#                     (or use the "exec auto-apply" entrypoint manually)
+#
+# Mounts:
+#   - /var/run/docker.sock     (talk to the local docker daemon)
+#   - /data                    (state DB, last_scan.txt)
+#   - /root/.ssh/config:ro     (for RemoteSSH to other hosts)
+#
+# Important: this stack assumes the host's docker socket is on the
+# default unix path. The "host" network_mode is the simplest way to
+# make the MCP transport reachable; on Unraid/TrueNAS the bridge
+# network also works (publish 18790).
+
+version: "3.9"
+
+services:
+  homelab-mcp:
+    image: ghcr.io/your-org/homelab-mcp:latest
+    container_name: homelab-mcp
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      HOMELAB_MCP_HOSTS: '["unraid"]'
+      HOMELAB_MCP_PORT: "18790"
+      HOMELAB_MCP_STATE_DIR: "/data"
+      HOMELAB_MCP_POLL_ENABLED: "true"
+      HOMELAB_MCP_POLL_INTERVAL: "21600"  # 6h
+      # ntfy (optional; required for BREAKING alerts)
+      HOMELAB_MCP_NTFY_URL: "https://ntfy.sh/"
+      HOMELAB_MCP_NTFY_TOPIC: ""
+      HOMELAB_MCP_NTFY_PRIORITY: "default"
+      # LLM (optional; required for risk classification)
+      HOMELAB_MCP_LLM_ENDPOINT: "http://localhost:11434/v1/chat/completions"
+      HOMELAB_MCP_LLM_API_KEY: ""
+      HOMELAB_MCP_LLM_MODEL: ""
+      HOMELAB_MCP_LLM_TIMEOUT: "30"
+      # Auto-apply
+      HOMELAB_MCP_AUTO_APPLY_POLICY: "safe-and-caution"
+      HOMELAB_MCP_LOCAL_HOST_ALIAS: "unraid"
+      HOMELAB_MCP_DOCKGE_STACKS_ROOT: "/mnt/Data/appdata/dockge/stacks"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /data:/data
+      - /root/.ssh/config:/root/.ssh/config:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://127.0.0.1:18790/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # The auto-apply cycle is run as a separate one-shot container,
+  # usually driven by an external cron (host cron, dockge schedule,
+  # etc.). You can also run it manually:
+  #   docker compose run --rm homelab-apply
+  homelab-apply:
+    image: ghcr.io/your-org/homelab-mcp:latest
+    container_name: homelab-apply
+    profiles: ["cron"]   # off by default
+    environment:
+      HOMELAB_MCP_HOSTS: '["unraid"]'
+      HOMELAB_MCP_STATE_DIR: "/data"
+      HOMELAB_MCP_AUTO_APPLY_POLICY: "safe-and-caution"
+      HOMELAB_MCP_LOCAL_HOST_ALIAS: "unraid"
+      HOMELAB_MCP_DOCKGE_STACKS_ROOT: "/mnt/Data/appdata/dockge/stacks"
+      HOMELAB_MCP_NTFY_URL: "https://ntfy.sh/"
+      HOMELAB_MCP_NTFY_TOPIC: ""
+      HOMELAB_MCP_LLM_ENDPOINT: "http://localhost:11434/v1/chat/completions"
+      HOMELAB_MCP_LLM_MODEL: ""
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /data:/data
+      - /root/.ssh/config:/root/.ssh/config:ro
+    entrypoint: ["auto-apply", "--per-row-timeout", "120"]

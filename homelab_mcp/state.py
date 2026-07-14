@@ -19,10 +19,9 @@ concurrent reader with ``OperationalError: database is locked``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import aiosqlite
-
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS stacks (
@@ -87,7 +86,7 @@ class UpdateRow:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 class State:

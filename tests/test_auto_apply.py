@@ -13,10 +13,7 @@ The orchestrator's job is to:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from homelab_mcp.state import State
 from homelab_mcp.updater.auto_apply import (
@@ -26,7 +23,6 @@ from homelab_mcp.updater.auto_apply import (
 )
 from homelab_mcp.updater.release_notes import ReleaseNotes
 from homelab_mcp.updater.risk import RiskVerdict
-
 
 # -- resolve_stack_dir -----------------------------------------------------
 

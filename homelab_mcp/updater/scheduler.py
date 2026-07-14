@@ -21,7 +21,6 @@ from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
 from homelab_mcp.updater.scanner import scan_host
 
-
 log = logging.getLogger(__name__)
 
 
@@ -97,7 +96,7 @@ class ScanScheduler:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=first_delay)
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         while not self._stop.is_set():
@@ -109,7 +108,7 @@ class ScanScheduler:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     async def _scan_all(self) -> list[dict[str, Any]]:

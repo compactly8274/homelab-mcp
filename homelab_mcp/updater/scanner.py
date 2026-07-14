@@ -18,7 +18,6 @@ from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
 from homelab_mcp.updater.registry import fetch_remote_digest, parse_image_ref
 
-
 log = logging.getLogger(__name__)
 
 

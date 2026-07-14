@@ -1,0 +1,59 @@
+# Patterns and files we never want in a Docker build context.
+
+# Venvs and build artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor + OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Git internals
+.git/
+.gitignore
+.gitattributes
+
+# Hermes internal sandbox state
+.hermes/
+
+# Secrets
+.env
+.env.*
+!.env.example
+**/secrets/
+**/*.pem
+**/*.key
+
+# CI / build workflows (not needed in image)
+.github/
+
+# Local install / deploy scripts (use them outside the build, not in)
+scripts/install-on-unraid.sh
+scripts/deploy-on-truenas.sh
+scripts/dockge-stack/
+
+# Docs that bloat the image
+*.md
+!README.md
+!CHANGELOG.md
+!LICENSE
+
+# Misc
+*.log
+*.tmp
+*.bak

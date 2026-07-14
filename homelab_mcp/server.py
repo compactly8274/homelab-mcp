@@ -15,7 +15,6 @@ from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.hosts.local_docker import LocalDocker
 from homelab_mcp.hosts.remote_ssh import RemoteSSH
 
-
 # Build the FastMCP singleton. host/port are applied in __main__.main().
 mcp = FastMCP(
     name="homelab-mcp",
@@ -83,9 +82,9 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     _host_clients = hosts
     _state = state
     # Eagerly import the tool modules so their @mcp.tool() decorators run.
-    import homelab_mcp.tools.stacks  # noqa: F401
-    import homelab_mcp.tools.events  # noqa: F401
-    import homelab_mcp.tools.health  # noqa: F401
+    import homelab_mcp.tools.events
+    import homelab_mcp.tools.health
+    import homelab_mcp.tools.stacks
     import homelab_mcp.tools.updates  # noqa: F401
 
 
@@ -108,4 +107,4 @@ def get_state() -> Any:
     return _state
 
 
-__all__ = ["mcp", "init_hosts", "build_hosts", "get_host", "get_state"]
+__all__ = ["build_hosts", "get_host", "get_state", "init_hosts", "mcp"]

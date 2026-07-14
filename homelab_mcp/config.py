@@ -187,6 +187,6 @@ class Settings(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _create_state_dir(self) -> "Settings":
+    def _create_state_dir(self) -> Settings:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         return self

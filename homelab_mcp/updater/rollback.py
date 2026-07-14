@@ -17,7 +17,6 @@ from typing import Any
 from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.updater.snapshot import StackSnapshot, stack_dir_of
 
-
 log = logging.getLogger(__name__)
 
 

@@ -22,7 +22,6 @@ import asyncssh
 
 from homelab_mcp.hosts.base import CommandResult
 
-
 _SSH_TIMEOUT_S = 15.0
 _SSH_QUIET = True  # suppress banner / motd in stdout
 
@@ -51,9 +50,8 @@ class RemoteSSH:
         self._name = name
         self._alias = ssh_alias
         self._config_path = Path(ssh_config_path).expanduser()
-        if verify_config:
-            if not self._config_path.is_file():
-                raise FileNotFoundError(f"ssh config not found: {self._config_path}")
+        if verify_config and not self._config_path.is_file():
+            raise FileNotFoundError(f"ssh config not found: {self._config_path}")
         self._conn: asyncssh.SSHClientConnection | None = None
 
     @property
@@ -78,7 +76,7 @@ class RemoteSSH:
                 conn.run(command, check=False, stderr=asyncssh.PIPE),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return CommandResult(124, "", f"timeout after {timeout}s",
                                  int((time.monotonic() - t0) * 1000))
         except (OSError, asyncssh.Error) as e:

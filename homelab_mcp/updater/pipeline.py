@@ -25,8 +25,7 @@ from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
 from homelab_mcp.updater.apply import apply_update
 from homelab_mcp.updater.rollback import rollback_stack
-from homelab_mcp.updater.snapshot import StackSnapshot, snapshot_stack
-
+from homelab_mcp.updater.snapshot import snapshot_stack
 
 log = logging.getLogger(__name__)
 

@@ -24,7 +24,6 @@ from typing import Any, Protocol
 
 import httpx
 
-
 log = logging.getLogger(__name__)
 
 
@@ -57,7 +56,7 @@ class RiskVerdict:
                 self.risk = "CAUTION"
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "RiskVerdict":
+    def from_dict(cls, d: dict[str, Any]) -> RiskVerdict:
         """Build a verdict, coercing unknown risk strings to CAUTION."""
         return cls(
             risk=_coerce_risk(d.get("risk")),

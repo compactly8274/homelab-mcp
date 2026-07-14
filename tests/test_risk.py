@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from homelab_mcp.updater.risk import (
-    RiskError,
     RiskVerdict,
     classify_release_notes,
 )
@@ -155,7 +152,7 @@ async def test_classify_auth_sends_bearer_header() -> None:
         api_key="sk-test",
         client=client,  # type: ignore[arg-type]
     )
-    url, headers = client.calls[0]
+    _url, headers = client.calls[0]
     assert headers.get("Authorization", "").startswith("Bearer sk-test")
 
 
@@ -176,7 +173,7 @@ async def test_classify_omits_bearer_when_no_api_key() -> None:
         notes_text="x",
         client=client,  # type: ignore[arg-type]
     )
-    url, headers = client.calls[0]
+    _url, headers = client.calls[0]
     assert "Authorization" not in headers
 
 

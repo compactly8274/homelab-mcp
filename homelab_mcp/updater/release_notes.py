@@ -23,7 +23,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-
 log = logging.getLogger(__name__)
 
 MAX_NOTES_BYTES = 8 * 1024

@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from homelab_mcp.state import State, UpdateRow
 
 

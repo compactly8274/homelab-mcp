@@ -31,7 +31,6 @@ from homelab_mcp.updater.pipeline import run_pipeline as _default_run_pipeline
 from homelab_mcp.updater.release_notes import fetch_release_notes as _default_fetch
 from homelab_mcp.updater.risk import classify_release_notes as _default_classify
 
-
 log = logging.getLogger(__name__)
 
 
@@ -128,7 +127,7 @@ async def run_one_cycle(
                 "action": result.get("action", "?"),
                 "verdict": result.get("verdict", {}),
             })
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.error("pending row %s/%s: timeout after %.1fs", host_name, stack, per_row_timeout)
             out.append({"host": host_name, "stack": stack, "action": "timeout"})
         except Exception as e:

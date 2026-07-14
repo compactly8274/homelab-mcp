@@ -1,16 +1,12 @@
 """Tests for the image-drift scanner."""
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from homelab_mcp.state import State
 from homelab_mcp.updater.registry import RegistryResult
 from homelab_mcp.updater.scanner import _local_digest_from_inspect, scan_host
-
 
 # -- _local_digest_from_inspect --------------------------------------------
 
@@ -77,7 +73,6 @@ async def test_scan_host_records_drift_to_state(tmp_path: Path) -> None:
         "homelab_mcp.updater.scanner.fetch_remote_digest",
         AsyncMockReturn(RegistryResult(kind="ok", digest=remote_digest)),
     ):
-        from unittest.mock import AsyncMock
         # Replace with an async function
         async def _fake(*args, **kwargs):
             return RegistryResult(kind="ok", digest=remote_digest)

@@ -8,15 +8,12 @@ post-update probes don't pass.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
-from homelab_mcp.updater.registry import parse_image_ref
-
 
 log = logging.getLogger(__name__)
 
@@ -111,9 +108,8 @@ def _container_config_digest(info: dict[str, Any]) -> str | None:
     - ``ImageConfig.Id``    (legacy)
     """
     cfg = info.get("Config") or {}
-    if isinstance(cfg, dict) and isinstance(cfg.get("Id"), str):
-        if cfg["Id"].startswith("sha256:"):
-            return cfg["Id"]
+    if isinstance(cfg, dict) and isinstance(cfg.get("Id"), str) and cfg["Id"].startswith("sha256:"):
+        return cfg["Id"]
     return None
 
 

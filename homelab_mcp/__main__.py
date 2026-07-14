@@ -57,7 +57,7 @@ async def _build_lifecycle():
 
 def main() -> int:
     """Sync entry point. Returns process exit code."""
-    scheduler, hosts, state = asyncio.new_event_loop().run_until_complete(_build_lifecycle())
+    scheduler, _hosts, _state = asyncio.new_event_loop().run_until_complete(_build_lifecycle())
 
     # Run the scheduler as a background task on the loop that mcp.run() creates.
     shutdown_started = threading.Event()
@@ -81,8 +81,9 @@ def main() -> int:
     # Start the scheduler in the current event loop if there is one.
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(scheduler.run() if scheduler else asyncio.sleep(0))
+        if loop.is_running() and scheduler is not None:
+            task = loop.create_task(scheduler.run())
+            _ = task
     except RuntimeError:
         pass
 

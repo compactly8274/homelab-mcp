@@ -15,9 +15,9 @@ def test_mcp_is_a_fastmcp_instance() -> None:
 
 def test_mcp_has_tools_registered() -> None:
     """Phase 1 wires the read-only tools into the server."""
-    import homelab_mcp.tools.stacks  # noqa: F401
-    import homelab_mcp.tools.events  # noqa: F401
-    import homelab_mcp.tools.health  # noqa: F401
+    import homelab_mcp.tools.events
+    import homelab_mcp.tools.health
+    import homelab_mcp.tools.stacks
     import homelab_mcp.tools.updates  # noqa: F401
     tools = mcp._tool_manager._tools
     expected = {
@@ -56,6 +56,7 @@ def test_local_host_alias_explicit() -> None:
 def test_build_hosts_local_and_remote() -> None:
     """build_hosts wires up LocalDocker for the local alias, RemoteSSH for others."""
     from unittest.mock import patch
+
     from homelab_mcp.hosts.local_docker import LocalDocker
     from homelab_mcp.hosts.remote_ssh import RemoteSSH
     from homelab_mcp.server import build_hosts

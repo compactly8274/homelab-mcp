@@ -21,7 +21,6 @@ import logging
 import sys
 from typing import Any, Protocol, runtime_checkable
 
-
 log = logging.getLogger(__name__)
 
 

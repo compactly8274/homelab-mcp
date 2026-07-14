@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from homelab_mcp.hosts.base import CommandResult
 from homelab_mcp.hosts.local_docker import LocalDocker
 from homelab_mcp.hosts.remote_ssh import RemoteSSH
-
 
 # -- LocalDocker ------------------------------------------------------------
 
