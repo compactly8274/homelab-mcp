@@ -3,8 +3,6 @@ name: test-build-publish
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 env:
   PYTHON_VERSION: "3.12"
@@ -12,8 +10,6 @@ env:
 
 jobs:
   test:
-    name: Test (Python ${{ env.PYTHON_VERSION }})
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: echo "triggered OK with env"
+      - run: echo "env-test-2"
