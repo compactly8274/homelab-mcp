@@ -31,6 +31,13 @@ jobs:
       - name: Lint
         run: uv run ruff check .
       - name: Test
+        # HOMELAB_MCP_LIVE=0 keeps the live SSH integration tests skipped
+        # in CI. They're only run on-demand against a real host (see
+        # tests/live/README.md). Setting 0 explicitly prevents accidental
+        # activation if a contributor has a HOMELAB_MCP_LIVE_HOST_NAME
+        # in their environment.
+        env:
+          HOMELAB_MCP_LIVE: "0"
         run: uv run pytest -ra --tb=short
 
   build:

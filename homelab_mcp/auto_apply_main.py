@@ -154,13 +154,32 @@ def summarize(rows: list[dict[str, Any]]) -> str:
 
 
 def _build_notifier(settings: Settings) -> MultiNotifier:
-    """Build a MultiNotifier from the Settings (just ntfy for now)."""
+    """Build a MultiNotifier from the Settings.
+
+    Includes every backend whose required env vars are set. ntfy,
+    Discord, and Pushover all share the same Notifier protocol so the
+    auto-apply pipeline doesn't care which one is configured.
+    """
     notifiers = []
     if settings.ntfy_topic:
         notifiers.append(NtfyNotifier(
             base_url=settings.ntfy_url,
             topic=settings.ntfy_topic,
             priority=settings.ntfy_priority,
+        ))
+    if settings.discord_webhook_url:
+        from homelab_mcp.updater.discord import DiscordNotifier
+        notifiers.append(DiscordNotifier(
+            webhook_url=settings.discord_webhook_url,
+            username=settings.discord_username,
+        ))
+    if settings.pushover_app_token and settings.pushover_user_key:
+        from homelab_mcp.updater.pushover import PushoverNotifier
+        notifiers.append(PushoverNotifier(
+            app_token=settings.pushover_app_token,
+            user_key=settings.pushover_user_key,
+            device=settings.pushover_device or None,
+            sound=settings.pushover_sound,
         ))
     return MultiNotifier(notifiers)
 

@@ -26,6 +26,19 @@ Env-var reference (all optional unless noted):
                                       when deploying the daemon to TrueNAS)
 - ``HOMELAB_MCP_DOCKGE_STACKS_ROOT`` Dockge stack root (default
                                       ``/mnt/Data/appdata/dockge/stacks``)
+- ``HOMELAB_MCP_DISCORD_WEBHOOK_URL`` Discord webhook URL (default empty;
+                                       enabled when set; see Discord
+                                       channel settings → Integrations
+                                       → Webhooks)
+- ``HOMELAB_MCP_DISCORD_USERNAME``    Username for the webhook bot
+                                       (default ``homelab-mcp``)
+- ``HOMELAB_MCP_PUSHOVER_APP_TOKEN``  Pushover app token (default empty;
+                                       enabled when set; create at
+                                       https://pushover.net/apps/build)
+- ``HOMELAB_MCP_PUSHOVER_USER_KEY``   Pushover user/group key (default empty)
+- ``HOMELAB_MCP_PUSHOVER_DEVICE``     Pushover target device name (optional;
+                                       if unset, all user's devices)
+- ``HOMELAB_MCP_PUSHOVER_SOUND``      Pushover sound name (default ``pushover``)
 """
 
 from __future__ import annotations
@@ -109,6 +122,16 @@ class Settings(BaseModel):
     local_host_alias: str = "unraid"
     dockge_stacks_root: str = "/mnt/Data/appdata/dockge/stacks"
 
+    # Discord notifier
+    discord_webhook_url: str = ""
+    discord_username: str = "homelab-mcp"
+
+    # Pushover notifier
+    pushover_app_token: str = ""
+    pushover_user_key: str = ""
+    pushover_device: str = ""
+    pushover_sound: str = "pushover"
+
     @field_validator("hosts")
     @classmethod
     def _hosts_nonempty(cls, v: list[str]) -> list[str]:
@@ -184,6 +207,18 @@ class Settings(BaseModel):
             data["dockge_stacks_root"] = os.getenv(
                 "HOMELAB_MCP_DOCKGE_STACKS_ROOT", "/mnt/Data/appdata/dockge/stacks"
             )
+        if "discord_webhook_url" not in data:
+            data["discord_webhook_url"] = os.getenv("HOMELAB_MCP_DISCORD_WEBHOOK_URL", "")
+        if "discord_username" not in data:
+            data["discord_username"] = os.getenv("HOMELAB_MCP_DISCORD_USERNAME", "homelab-mcp")
+        if "pushover_app_token" not in data:
+            data["pushover_app_token"] = os.getenv("HOMELAB_MCP_PUSHOVER_APP_TOKEN", "")
+        if "pushover_user_key" not in data:
+            data["pushover_user_key"] = os.getenv("HOMELAB_MCP_PUSHOVER_USER_KEY", "")
+        if "pushover_device" not in data:
+            data["pushover_device"] = os.getenv("HOMELAB_MCP_PUSHOVER_DEVICE", "")
+        if "pushover_sound" not in data:
+            data["pushover_sound"] = os.getenv("HOMELAB_MCP_PUSHOVER_SOUND", "pushover")
         return data
 
     @model_validator(mode="after")

@@ -102,6 +102,12 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `HOMELAB_MCP_NTFY_URL` | `https://ntfy.sh/` | notifier base |
 | `HOMELAB_MCP_NTFY_TOPIC` | `""` | required for alerts |
 | `HOMELAB_MCP_NTFY_PRIORITY` | `default` | default priority |
+| `HOMELAB_MCP_DISCORD_WEBHOOK_URL` | `""` | Discord webhook (empty = disabled) |
+| `HOMELAB_MCP_DISCORD_USERNAME` | `homelab-mcp` | webhook display name |
+| `HOMELAB_MCP_PUSHOVER_APP_TOKEN` | `""` | Pushover app token (empty = disabled) |
+| `HOMELAB_MCP_PUSHOVER_USER_KEY` | `""` | Pushover user key |
+| `HOMELAB_MCP_PUSHOVER_DEVICE` | `""` | target device by name (optional) |
+| `HOMELAB_MCP_PUSHOVER_SOUND` | `pushover` | alert sound |
 | `HOMELAB_MCP_LLM_ENDPOINT` | `http://localhost:11434/v1/chat/completions` | OpenAI-compatible |
 | `HOMELAB_MCP_LLM_API_KEY` | `""` | Bearer token (optional) |
 | `HOMELAB_MCP_LLM_MODEL` | `""` | model name (required) |
@@ -147,7 +153,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 uv run pytest -q
 ```
 
-Currently 112 tests across:
+Currently 145 tests across:
 - config (env-var loading, validation)
 - state (SQLite CRUD, idempotent writes, busy_timeout)
 - hosts (LocalDocker + RemoteSSH, structural conformance to HostClient)
@@ -157,12 +163,84 @@ Currently 112 tests across:
 - updater.release_notes (image→GitHub, GH Releases API, CHANGELOG fallback, truncation)
 - updater.risk (SAFE/CAUTION/BREAKING classification, error fallbacks)
 - updater.notifier (ntfy POST, multi-fan-out, console)
+- updater.notifier_backends (Discord + Pushover: body building, network errors, MultiNotifier dispatch, error isolation)
 - updater.auto_apply (policy decisions, classifier-fail CAUTION fallback)
 - auto_apply_main (cron arg parsing, per-row exception isolation, summary)
 - server (FastMCP singleton, tool registration, build_hosts wiring)
 
-Live tests (skipped unless `HOMELAB_MCP_LIVE=1`) cover SSH connections
-to a real host.
+### Live SSH tests (opt-in)
+
+There is a separate test file at `tests/test_live_ssh.py` that
+exercises the `RemoteSSH` backend against a real homelab host. These
+are **skipped by default** (the sandbox has no LAN egress). To run
+them on a host that has SSH access to your homelab:
+
+```bash
+HOMELAB_MCP_LIVE=1 \
+HOMELAB_MCP_LIVE_HOST_NAME=unraid \
+HOMELAB_MCP_LIVE_HOST_HOSTNAME=192.168.1.104 \
+HOMELAB_MCP_LIVE_HOST_USER=root \
+HOMELAB_MCP_SSH_CONFIG=/root/.ssh/config \
+pytest tests/test_live_ssh.py -v
+```
+
+The tests cover 9 real-host behaviors:
+- `list_containers` returns real data
+- `list_stacks` shape is right
+- `inspect_container` returns valid `docker inspect` JSON
+- `run_command` exit code, stdout, stderr are captured correctly
+- `run_command` timeout cancels the command
+- The configured user can run `docker` (no permission errors)
+- A `compose_pull` against a real directory returns successfully
+
+Full configuration recipe + troubleshooting is in
+[`tests/live/README.md`](tests/live/README.md).
+
+## Notifiers
+
+The auto-apply pipeline supports **three backends**, all sharing the
+same `Notifier` protocol. Configure any combination — the orchestrator
+dispatches to all of them.
+
+### ntfy (default)
+
+Set `HOMELAB_MCP_NTFY_TOPIC` and you get free-form notifications on
+every BREAKING alert. Topic-based, no account required, supports
+priorities and tags.
+
+### Discord
+
+Set `HOMELAB_MCP_DISCORD_WEBHOOK_URL` to get color-coded embeds in a
+Discord channel. BREAKING alerts are red, CAUTION orange, SAFE green.
+To create a webhook: Discord server → channel settings → Integrations
+→ Webhooks → New Webhook → copy URL.
+
+### Pushover
+
+Set both `HOMELAB_MCP_PUSHOVER_APP_TOKEN` (create at
+https://pushover.net/apps/build) and `HOMELAB_MCP_PUSHOVER_USER_KEY`
+to get push notifications on your phone. Sounds and per-device
+targeting are configurable.
+
+### Adding a new notifier
+
+Implement the `Notifier` protocol in `homelab_mcp/updater/`:
+
+```python
+class Notifier(Protocol):
+    async def notify(
+        self, text: str, *,
+        title: str = "",
+        tags: list[str] | None = None,
+        priority: str | None = None,
+        click: str | None = None,
+    ) -> None: ...
+```
+
+Then add it to `_build_notifier` in `homelab_mcp/auto_apply_main.py`.
+Tests should follow the pattern in
+`tests/test_updater_notifier_backends.py`: pure `_build_body` +
+network `_post` separated.
 
 ## Security
 
