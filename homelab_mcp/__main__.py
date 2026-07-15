@@ -14,7 +14,8 @@ import sys
 import threading
 
 from homelab_mcp.config import Settings
-from homelab_mcp.server import build_hosts, init_hosts, mcp
+from homelab_mcp.http_routes import run_sse_with_health
+from homelab_mcp.server import build_hosts, get_state, init_hosts, mcp
 from homelab_mcp.state import State
 from homelab_mcp.updater.scheduler import ScanScheduler
 
@@ -52,12 +53,12 @@ async def _build_lifecycle():
             "[homelab-mcp] visibility scheduler disabled (HOMELAB_MCP_POLL_ENABLED=false)",
             file=sys.stderr,
         )
-    return scheduler, hosts, state
+    return scheduler, hosts, state, settings
 
 
 def main() -> int:
     """Sync entry point. Returns process exit code."""
-    scheduler, _hosts, _state = asyncio.new_event_loop().run_until_complete(_build_lifecycle())
+    scheduler, _hosts, _state, settings = asyncio.new_event_loop().run_until_complete(_build_lifecycle())
 
     # Run the scheduler as a background task on the loop that mcp.run() creates.
     shutdown_started = threading.Event()
@@ -88,7 +89,9 @@ def main() -> int:
         pass
 
     try:
-        mcp.run(transport="sse")
+        run_sse_with_health(
+            mcp, host="0.0.0.0", port=settings.port, get_state=get_state,
+        )
     finally:
         if scheduler is not None:
             scheduler.stop()

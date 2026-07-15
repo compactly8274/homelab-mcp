@@ -292,6 +292,55 @@ class State:
         finally:
             await db.close()
 
+    async def summary(self) -> dict:
+        """Aggregate counts for /status endpoint.
+
+        Returns the number of tracked stacks, the number of pending
+        update rows, the timestamp of the last scan (if any), and
+        the timestamp of the last completed update (if any). All
+        queries are best-effort: if a table is missing, we report
+        0 / null for that field.
+        """
+        out: dict = {}
+
+        async def _scalar(sql: str, params: tuple = ()) -> int | None:
+            db = await self._connect()
+            try:
+                cur = await db.execute(sql, params)
+                row = await cur.fetchone()
+                return row[0] if row else None
+            finally:
+                await db.close()
+
+        try:
+            n = await _scalar("SELECT COUNT(*) FROM stacks")
+            out["stacks"] = int(n or 0)
+        except Exception:
+            out["stacks"] = 0
+
+        try:
+            n = await _scalar("SELECT COUNT(*) FROM pending_updates")
+            out["pending_updates"] = int(n or 0)
+        except Exception:
+            out["pending_updates"] = 0
+
+        try:
+            out["last_scan_ts"] = await _scalar(
+                "SELECT MAX(last_checked_at) FROM stacks"
+            )
+        except Exception:
+            out["last_scan_ts"] = None
+
+        try:
+            out["last_applied_update_ts"] = await _scalar(
+                "SELECT MAX(finished_at) FROM update_history "
+                "WHERE status = 'applied'"
+            )
+        except Exception:
+            out["last_applied_update_ts"] = None
+
+        return out
+
     async def mark_update_seen(
         self, host: str, stack: str, latest_digest: str
     ) -> int:
