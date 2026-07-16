@@ -55,6 +55,10 @@ Env-var reference (all optional unless noted):
                                      tool. **LLMs can delete downloaded
                                      models** — keep off unless you've audited
                                      the deployment.
+- ``HOMELAB_MCP_MEMORY_PATH``       path to the memory store SQLite file
+                                     (default ``$HOMELAB_MCP_STATE_DIR/memory.db``;
+                                     the ``memory_*`` tools create the file
+                                     on first use if missing)
 - ``HOMELAB_MCP_PLEX_URL``           Plex base URL (default
                                       ``http://192.168.1.104:32400``)
 - ``HOMELAB_MCP_PLEX_TOKEN``         Plex API token (X-Plex-Token); see
@@ -172,6 +176,9 @@ class Settings(BaseModel):
     ollama_url: str = "http://192.168.1.104:11434"
     ollama_allow_pull: bool = False
     ollama_allow_delete: bool = False
+
+    # Long-term memory store (MCP-side). Default: $state_dir/memory.db
+    memory_path: str = ""
     plex_url: str = "http://192.168.1.104:32400"
     plex_token: str = ""
     immich_url: str = "http://192.168.1.104:2283"
@@ -281,6 +288,8 @@ class Settings(BaseModel):
             data["ollama_allow_pull"] = _env_bool("HOMELAB_MCP_OLLAMA_ALLOW_PULL", False)
         if "ollama_allow_delete" not in data:
             data["ollama_allow_delete"] = _env_bool("HOMELAB_MCP_OLLAMA_ALLOW_DELETE", False)
+        if "memory_path" not in data:
+            data["memory_path"] = os.getenv("HOMELAB_MCP_MEMORY_PATH", "")
         if "plex_url" not in data:
             data["plex_url"] = os.getenv("HOMELAB_MCP_PLEX_URL", "http://192.168.1.104:32400")
         if "plex_token" not in data:

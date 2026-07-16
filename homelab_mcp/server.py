@@ -89,6 +89,7 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.events
     import homelab_mcp.tools.get_update_history
     import homelab_mcp.tools.health
+    import homelab_mcp.tools.memory
     import homelab_mcp.tools.ollama
     import homelab_mcp.tools.plex
     import homelab_mcp.tools.searxng
