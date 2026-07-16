@@ -38,7 +38,32 @@ Env-var reference (all optional unless noted):
 - ``HOMELAB_MCP_PUSHOVER_USER_KEY``   Pushover user/group key (default empty)
 - ``HOMELAB_MCP_PUSHOVER_DEVICE``     Pushover target device name (optional;
                                        if unset, all user's devices)
-- ``HOMELAB_MCP_PUSHOVER_SOUND``      Pushover sound name (default ``pushover``)
+- ``HOMELAB_MCP_PUSHOVER_SOUND``     Pushover sound name (default ``pushover``)
+- ``HOMELAB_MCP_SEARXNG_URL``        SearXNG base URL (default
+                                      ``http://192.168.1.7:8080``; used by
+                                      the searxng_* tools)
+- ``HOMELAB_MCP_OLLAMA_URL``         Ollama base URL (default
+                                      ``http://192.168.1.104:11434``; used by
+                                      the ollama_* tools)
+- ``HOMELAB_MCP_PLEX_URL``           Plex base URL (default
+                                      ``http://192.168.1.104:32400``)
+- ``HOMELAB_MCP_PLEX_TOKEN``         Plex API token (X-Plex-Token); see
+                                      https://support.plex.tv/articles/204059436
+- ``HOMELAB_MCP_IMMICH_URL``         Immich base URL (default
+                                      ``http://192.168.1.104:2283``)
+- ``HOMELAB_MCP_IMMICH_API_KEY``     Immich API key (Settings -> API Keys)
+- ``HOMELAB_MCP_SONARR_URL``         Sonarr base URL (default
+                                      ``http://192.168.1.104:8989``)
+- ``HOMELAB_MCP_SONARR_API_KEY``     Sonarr API key (Settings -> General)
+- ``HOMELAB_MCP_RADARR_URL``         Radarr base URL (default
+                                      ``http://192.168.1.104:7878``)
+- ``HOMELAB_MCP_RADARR_API_KEY``     Radarr API key
+- ``HOMELAB_MCP_LIDARR_URL``         Lidarr base URL (default
+                                      ``http://192.168.1.104:8686``)
+- ``HOMELAB_MCP_LIDARR_API_KEY``     Lidarr API key
+- ``HOMELAB_MCP_READARR_URL``        Readarr base URL (default
+                                      ``http://192.168.1.104:8787``)
+- ``HOMELAB_MCP_READARR_API_KEY``    Readarr API key
 """
 
 from __future__ import annotations
@@ -132,6 +157,22 @@ class Settings(BaseModel):
     pushover_device: str = ""
     pushover_sound: str = "pushover"
 
+    # Service integrations
+    searxng_url: str = "http://192.168.1.7:8080"
+    ollama_url: str = "http://192.168.1.104:11434"
+    plex_url: str = "http://192.168.1.104:32400"
+    plex_token: str = ""
+    immich_url: str = "http://192.168.1.104:2283"
+    immich_api_key: str = ""
+    sonarr_url: str = "http://192.168.1.104:8989"
+    sonarr_api_key: str = ""
+    radarr_url: str = "http://192.168.1.104:7878"
+    radarr_api_key: str = ""
+    lidarr_url: str = "http://192.168.1.104:8686"
+    lidarr_api_key: str = ""
+    readarr_url: str = "http://192.168.1.104:8787"
+    readarr_api_key: str = ""
+
     @field_validator("hosts")
     @classmethod
     def _hosts_nonempty(cls, v: list[str]) -> list[str]:
@@ -219,6 +260,35 @@ class Settings(BaseModel):
             data["pushover_device"] = os.getenv("HOMELAB_MCP_PUSHOVER_DEVICE", "")
         if "pushover_sound" not in data:
             data["pushover_sound"] = os.getenv("HOMELAB_MCP_PUSHOVER_SOUND", "pushover")
+        # Service integrations
+        if "searxng_url" not in data:
+            data["searxng_url"] = os.getenv("HOMELAB_MCP_SEARXNG_URL", "http://192.168.1.7:8080")
+        if "ollama_url" not in data:
+            data["ollama_url"] = os.getenv("HOMELAB_MCP_OLLAMA_URL", "http://192.168.1.104:11434")
+        if "plex_url" not in data:
+            data["plex_url"] = os.getenv("HOMELAB_MCP_PLEX_URL", "http://192.168.1.104:32400")
+        if "plex_token" not in data:
+            data["plex_token"] = os.getenv("HOMELAB_MCP_PLEX_TOKEN", "")
+        if "immich_url" not in data:
+            data["immich_url"] = os.getenv("HOMELAB_MCP_IMMICH_URL", "http://192.168.1.104:2283")
+        if "immich_api_key" not in data:
+            data["immich_api_key"] = os.getenv("HOMELAB_MCP_IMMICH_API_KEY", "")
+        if "sonarr_url" not in data:
+            data["sonarr_url"] = os.getenv("HOMELAB_MCP_SONARR_URL", "http://192.168.1.104:8989")
+        if "sonarr_api_key" not in data:
+            data["sonarr_api_key"] = os.getenv("HOMELAB_MCP_SONARR_API_KEY", "")
+        if "radarr_url" not in data:
+            data["radarr_url"] = os.getenv("HOMELAB_MCP_RADARR_URL", "http://192.168.1.104:7878")
+        if "radarr_api_key" not in data:
+            data["radarr_api_key"] = os.getenv("HOMELAB_MCP_RADARR_API_KEY", "")
+        if "lidarr_url" not in data:
+            data["lidarr_url"] = os.getenv("HOMELAB_MCP_LIDARR_URL", "http://192.168.1.104:8686")
+        if "lidarr_api_key" not in data:
+            data["lidarr_api_key"] = os.getenv("HOMELAB_MCP_LIDARR_API_KEY", "")
+        if "readarr_url" not in data:
+            data["readarr_url"] = os.getenv("HOMELAB_MCP_READARR_URL", "http://192.168.1.104:8787")
+        if "readarr_api_key" not in data:
+            data["readarr_api_key"] = os.getenv("HOMELAB_MCP_READARR_API_KEY", "")
         return data
 
     @model_validator(mode="after")

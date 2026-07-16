@@ -1,6 +1,18 @@
 # TLS for internal services — the actual plan (UCG-based, 2026-07-15)
 
-> Replaces the previous plan (`TLS_DEPLOYMENT_PLAN_2026-07-15.md`). That plan assumed AdGuard was the LAN DNS and the rewrites would go there. **You use the UCG for DNS, not AdGuard.** New plan, same goal: every internal service reachable as `https://<name>.pancakefarts.xyz` from anywhere with a valid public-CA cert, no browser warnings.
+> Replaces the previous plan (`TLS_DEPLOYMENT_PLAN_2026-07-15.md`). That plan assumed AdGuard was the LAN DNS and the rewrites would go there. **You use the UCG for DNS, not AdGuard.** New plan, same goal: every internal service reachable as `https://<name>.verasaidthat.ca` from the LAN with a valid public-CA cert, no browser warnings.
+
+## Hard requirement: internal-only (verified 2026-07-15)
+
+**No service on `verasaidthat.ca` is exposed to the public internet.** This is a hard constraint, not a default. Concretely:
+
+- **No UCG port-forwards** to the new internal services (no DNAT for these hostnames)
+- **No Cloudflare proxy** (every A record has `proxied: false` — grey cloud, not orange)
+- **DNS-01 only for cert issuance** — LE verifies domain control via a TXT record, which doesn't require the hostname to be reachable. (No `http-01`, no `tls-alpn-01` — those would require external reachability.)
+- **The wildcard cert `*.verasaidthat.ca` is publicly trusted** but the services it covers have no public listener
+- **The split-horizon DNS** only matters for LAN clients — public clients that *try* to reach `jellyfin.verasaidthat.ca` will get the public IP (`162.255.119.41`, Namecheap parking), which doesn't expose anything anyway. There's no actual attack surface; the public IP is just a redirect page.
+
+This constraint is why we needed a *real* public-CA-issued cert (not a self-signed or private-CA one). The cert validates the LAN hostname on every device without ever needing that device to talk to a public server.
 
 ## Critical: the dual-controller gotcha (verified 2026-07-15)
 
@@ -14,6 +26,47 @@ You have **two Unifi controllers**:
 
 Both keys are at `/home/hermeswebui/.hermes/memories/UNIFI_API_KEY.md` (symlink to profile dir).
 
+## Domain naming (updated 2026-07-15)
+
+**You asked (latest): "I don't even want pancakefarts.xyz involved at all... I want to have them separate. I don't want any of these services exposed externally, only for internal use."**
+
+The pick: **`verasaidthat.ca`** — a domain you already own. Hostnames look like `jellyfin.verasaidthat.ca`. A wildcard LE cert covers `*.verasaidthat.ca`. The domain is currently in Namecheap DNS with a URL forward (apex redirects to `www`) and MX records pointing at Namecheap's `eforward` service.
+
+**Why this works for internal-only:**
+- LE will issue a cert for `*.verasaidthat.ca` via DNS-01 (you control the zone, you can write the TXT challenge)
+- The cert is publicly trusted, so every LAN device (AppleTV, iOS, browser) accepts it without a root cert install
+- The wildcard SAN is the only thing the device sees — it doesn't care that the cert is for a "real" domain
+- The domain is yours; no one else controls it; the cert is durable
+
+**Why this is completely separate from `pancakefarts.xyz`:**
+- Different zone, different nameservers (if we move to Cloudflare, different account if you want — though one account can host both)
+- No apex, no subdomain, no CNAME relationship
+- If you ever sell or retire `pancakefarts.xyz`, internal services are unaffected
+- If you ever need to expose a service to the internet, you decide which zone it goes on at that time
+
+**Current state of `verasaidthat.ca` (verified 2026-07-15):**
+- Apex A: `162.255.119.41` (Namecheap parking)
+- `www` A: `216.227.142.170` (Namecheap parking)
+- NS: `dns1.registrar-servers.com`, `dns2.registrar-servers.com` (Namecheap DNS)
+- MX: `eforward1-5.registrar-servers.com` (Namecheap email forwarding, pref 10/15/20)
+- HTTP: 302 redirect from `verasaidthat.ca` → `www.verasaidthat.ca` (Namecheap URL Forward)
+
+**Two DNS-provider paths:**
+- **Leave at Namecheap DNS (status quo):** `dns-namecheap` certbot plugin works (Python shim using Namecheap's API). Less mature than Cloudflare's plugin but functional.
+- **Move to Cloudflare (recommended):** change NS at Namecheap, create the zone in Cloudflare, use `dns-cloudflare` certbot plugin. Cloudflare's plugin is more reliable and well-tested. **Migrating requires recreating the MX records if you use Namecheap's email forwarding** — `eforward*` won't work once NS leaves Namecheap.
+
+**If you want email forwarding on `verasaidthat.ca` to keep working, the migration to Cloudflare needs the same MX records recreated there.** Or, simpler: use Cloudflare Email Routing (free, forwards to a real inbox) which does the same thing. We can address that in a follow-up.
+
+**Alternative naming considered and rejected:**
+- `jellyfin.verasaidthat.ca` — you said no pancakefarts.xyz involvement
+- `jellyfin.lan` — no public zone, no public-CA cert
+- `jellyfin.localdomain` — Debian convention, not a public zone
+- `jellyfin.home` — TLD reserved by Windows 10+ HNS
+- `jellyfin.lan` (suffix on its own) — not a public zone
+- Buying a new domain — you have one, no need to spend more
+
+**If you want to change this later:** the only change is the cert (one certbot run) and the DNS records. The proxy_hosts, the LE cert, the AdGuard/UCG rewrites — all point to the new hostname. Everything else stays.
+
 ---
 
 ## TL;DR
@@ -21,28 +74,32 @@ Both keys are at `/home/hermeswebui/.hermes/memories/UNIFI_API_KEY.md` (symlink 
 **Architecture (verified against the live UOS API):**
 
 ```
-LAN client (phone, laptop, AppleTV)               Public client (phone on cellular)
-        │                                                     │
-        ▼                                                     ▼
-   UCG (192.168.1.1)                            Cloudflare DNS
-   - DHCP server (currently relaying to dead .254)         │
-   - DNS server (currently upstream-only)                  ▼
-   - Has `dhcpd_dns_server_1` field per-network   173.181.99.119 (UCG WAN)
-     (this is the split-horizon slot)                       │
-        │                                                    │
-        ▼                                                    │
-   AdGuard (192.168.1.3)                                  ...same path...
-   - Currently NOT in the DNS chain
-   - Could be the split-horizon DNS if we want
-                                              OR ↓ ↓ ↓
+LAN client (phone, laptop, AppleTV)        Public client (phone on cellular, any random bot)
+        │                                          │
+        ▼                                          ▼
+   UCG DNS (192.168.1.1:53)                 Cloudflare DNS (verasaidthat.ca zone)
+   - Split-horizon: hostname → 192.168.1.x   - Returns parking IP 162.255.119.41
+   - Currently upstream-only (no split yet)   - No A records for service hostnames
+        │                                          │
+        ▼                                          ▼
+   AdGuard (192.168.1.3) — optional layer     Namecheap URL Forward (parking page)
+   - rewrites_enabled, rewrites: []
+   - Could be the split-horizon DNS
+              │
+              ▼
    npmplus on Unraid:443 (192.168.1.104)
-   wildcard *.pancakefarts.xyz cert (LE, DNS-01)
+   wildcard *.verasaidthat.ca cert (LE, DNS-01)
    proxy_host per service → backend:port
-        │
-        ▼
+              │
+              ▼
    Backend container (192.168.1.x:port) or
    backend on TrueNAS (.122:port)
 ```
+
+**No public A records for service hostnames.** The wildcard cert covers `*.verasaidthat.ca` regardless. The cert is publicly trusted (LE verified control via DNS-01) but nothing on the public internet listens for these hostnames.
+
+- **LAN DNS** (UCG split-horizon, optionally routed through AdGuard) provides the actual hostname resolution.
+- **Public DNS** shows the parking IP, which 302-redirects to a different parking page — no information disclosure, no exposed service.
 
 **Same hostname, two DNS answers. The "answer" comes from one of two places:**
 
@@ -82,15 +139,17 @@ Before I touch anything, these need answering:
    - **AdGuard (recommended):** set `dhcpd_dns_server_1: 192.168.1.3` on the Default and IoT networks. AdGuard's `rewrites` field becomes the split-horizon slot. You get ad-blocking as a side effect.
    - **UCG directly:** UCG has its own static-DNS-records feature, but it's not exposed via the API. Would require webUI work, no automation.
 
-2. **Wildcard cert approach OK?** One `*.pancakefarts.xyz` LE cert (via Cloudflare DNS-01) covers all 12 existing + 25 new services. Saves 25 individual certs.
+2. **Wildcard cert approach OK?** One `*.verasaidthat.ca` LE cert (via Cloudflare DNS-01) covers all ~50 new internal services. The 12 existing `*.pancakefarts.xyz` services keep their existing certs. Saves 50 individual certs.
 
 3. **What scope? Full sweep (~50 services) or a 3-service pilot first?**
    - Full sweep: same script for all of them, takes ~2 hours
    - Pilot: 3 services (jellyfin, homepage, adminer), validate end-to-end, then sweep
 
 4. **Cloudflare API token: do you have one already, or do we need to create one?**
-   - Needed: a token with `Zone:DNS:Edit` scope on `pancakefarts.xyz` only
+   - Needed: a token with `Zone:DNS:Edit` scope on `verasaidthat.ca` (NOT on `pancakefarts.xyz` — different zone)
    - Save it in 1Password; never on a server file
+   - **If you don't yet have Cloudflare managing `verasaidthat.ca`:** either (a) move the zone to Cloudflare first (change NS at Namecheap, then create the zone in Cloudflare), or (b) use the Namecheap API directly (different certbot plugin, `dns-namecheap`).
+   - **A separate CF token for `pancakefarts.xyz` already exists** (per the apex DDNS container memory). We're adding a new one for `verasaidthat.ca`, scope-limited to that zone only.
 
 ---
 
@@ -102,67 +161,67 @@ Same ~50 services as the previous plan. **Strike what you don't use, add what I 
 
 | Service | Container | Port | Hostname | Backend |
 |---|---|---|---|---|
-| Jellyfin | `jellyfin` (Unraid) | 8096 | `jellyfin.pancakefarts.xyz` | 192.168.1.104 |
-| Overseerr | `seerr` | 5055 | `seerr.pancakefarts.xyz` | 192.168.1.104 |
-| Sonarr | `sonarr` | 8989 | `sonarr.pancakefarts.xyz` | 192.168.1.104 |
-| Radarr | `radarr` | 7878 | `radarr.pancakefarts.xyz` | 192.168.1.104 |
-| Lidarr | `binhex-lidarr` | 8686 | `lidarr.pancakefarts.xyz` | 192.168.1.104 |
-| Readarr | `binhex-readarr` | 8787 | `readarr.pancakefarts.xyz` | 192.168.1.104 |
-| Bazarr | `bazarr` | 6767 | `bazarr.pancakefarts.xyz` | 192.168.1.104 |
-| Tautulli | `tautulli` | 8189 | `tautulli.pancakefarts.xyz` | 192.168.1.104 |
-| Homebridge | `homebridge` | n/a (mDNS) | `homebridge.pancakefarts.xyz` | 192.168.1.104 |
+| Jellyfin | `jellyfin` (Unraid) | 8096 | `jellyfin.verasaidthat.ca` | 192.168.1.104 |
+| Overseerr | `seerr` | 5055 | `seerr.verasaidthat.ca` | 192.168.1.104 |
+| Sonarr | `sonarr` | 8989 | `sonarr.verasaidthat.ca` | 192.168.1.104 |
+| Radarr | `radarr` | 7878 | `radarr.verasaidthat.ca` | 192.168.1.104 |
+| Lidarr | `binhex-lidarr` | 8686 | `lidarr.verasaidthat.ca` | 192.168.1.104 |
+| Readarr | `binhex-readarr` | 8787 | `readarr.verasaidthat.ca` | 192.168.1.104 |
+| Bazarr | `bazarr` | 6767 | `bazarr.verasaidthat.ca` | 192.168.1.104 |
+| Tautulli | `tautulli` | 8189 | `tautulli.verasaidthat.ca` | 192.168.1.104 |
+| Homebridge | `homebridge` | n/a (mDNS) | `homebridge.verasaidthat.ca` | 192.168.1.104 |
 
 ### Tier 2 — your daily admin
 
 | Service | Container | Port | Hostname | Backend |
 |---|---|---|---|---|
-| Homepage | `homepage` | 3030 | `homepage.pancakefarts.xyz` | 192.168.1.104 |
-| Adminer | `adminer` | 4545 | `adminer.pancakefarts.xyz` | 192.168.1.104 |
-| Apprise | `apprise` | 8010 | `apprise.pancakefarts.xyz` | 192.168.1.104 |
-| Glances | `glances` | 61208 | `glances.pancakefarts.xyz` | 192.168.1.104 |
-| Dockmon | `dockmon` | 8001 | `dockmon.pancakefarts.xyz` | 192.168.1.104 |
-| Dockwatch | `dockwatch` | 9999 | `dockwatch.pancakefarts.xyz` | 192.168.1.104 |
-| PeaNUT | `peanut` | 9500 | `peanut.pancakefarts.xyz` | 192.168.1.104 |
-| Hermes WebUI | `hermes-webui` | 18787 | `hermes.pancakefarts.xyz` | 192.168.1.104 |
+| Homepage | `homepage` | 3030 | `homepage.verasaidthat.ca` | 192.168.1.104 |
+| Adminer | `adminer` | 4545 | `adminer.verasaidthat.ca` | 192.168.1.104 |
+| Apprise | `apprise` | 8010 | `apprise.verasaidthat.ca` | 192.168.1.104 |
+| Glances | `glances` | 61208 | `glances.verasaidthat.ca` | 192.168.1.104 |
+| Dockmon | `dockmon` | 8001 | `dockmon.verasaidthat.ca` | 192.168.1.104 |
+| Dockwatch | `dockwatch` | 9999 | `dockwatch.verasaidthat.ca` | 192.168.1.104 |
+| PeaNUT | `peanut` | 9500 | `peanut.verasaidthat.ca` | 192.168.1.104 |
+| Hermes WebUI | `hermes-webui` | 18787 | `hermes.verasaidthat.ca` | 192.168.1.104 |
 
 ### Tier 3 — occasional admin tools
 
 | Service | Container | Port | Hostname | Backend |
 |---|---|---|---|---|
-| Scrutiny | `scrutiny` | 5756 | `scrutiny.pancakefarts.xyz` | 192.168.1.104 |
-| QDirStat | `qdirstat` | 7815 | `qdirstat.pancakefarts.xyz` | 192.168.1.104 |
-| Scanopy | `scanopy-server-1` | 60072 | `scanopy.pancakefarts.xyz` | 192.168.1.104 |
-| Profilarr | `profilarr` | 6868 | `profilarr.pancakefarts.xyz` | 192.168.1.104 |
-| UnraidConfigGuardian | `unraidconfigguardian` | 7842 | `unraid-cfg.pancakefarts.xyz` | 192.168.1.104 |
-| changedetection.io | `changedetection.io` | 5051 | `changedetection.pancakefarts.xyz` | 192.168.1.104 |
-| Databasus | `databasus` | 4005 | `databasus.pancakefarts.xyz` | 192.168.1.104 |
-| Calibre-Web | `calibre-web-automated` | 8083 | `calibre.pancakefarts.xyz` | 192.168.1.104 |
-| Actual Budget | `actualserver` | 5006 | `actual.pancakefarts.xyz` | 192.168.1.104 |
-| Bookshelf | `bookshelf` | 8587 | `bookshelf.pancakefarts.xyz` | 192.168.1.104 |
-| Paperless-AI | `paperless-ai` | 3321 | `paperless.pancakefarts.xyz` | 192.168.1.104 |
-| OpenBooks | `openbooks` | 8035 | `openbooks.pancakefarts.xyz` | 192.168.1.104 |
-| LubeLogger | `lubelogger` | 8780 | `lubelogger.pancakefarts.xyz` | 192.168.1.104 |
-| Shelfmark | `shelfmark` | 8084 | `shelfmark.pancakefarts.xyz` | 192.168.1.104 |
-| SoulSync | `soulsync` | 8008 | `soulsync.pancakefarts.xyz` | 192.168.1.104 |
-| Termix | `termix` | 30001 | `termix.pancakefarts.xyz` | 192.168.1.104 |
-| Maintainerr | `maintainerr` | 6246 | `maintainerr.pancakefarts.xyz` | 192.168.1.104 |
-| Hound | `hound-server` | 2323 | `hound.pancakefarts.xyz` | 192.168.1.104 |
-| Houndarr | `houndarr` | 2635 | `houndarr.pancakefarts.xyz` | 192.168.1.104 |
-| Mediamanager | `mediamanager-mediamanager-1` | 3060 | `mediamanager.pancakefarts.xyz` | 192.168.1.104 |
-| Plex2Letterboxd | `plex2letterboxd-frontend` | 5670 | `p2l.pancakefarts.xyz` | 192.168.1.104 |
-| YACReader | `yacreaderlibraryserver` | 8761 | `yacreader.pancakefarts.xyz` | 192.168.1.104 |
-| EbookBuddy | `ebookbuddy` | 5110 | `ebookbuddy.pancakefarts.xyz` | 192.168.1.104 |
-| Beets | `beets` | 8337 | `beets.pancakefarts.xyz` | 192.168.1.104 |
-| Kapowarr | `kapowarr` | 5656 | `kapowarr.pancakefarts.xyz` | 192.168.1.104 |
-| Explo | `explo` | 7288 | `explo.pancakefarts.xyz` | 192.168.1.104 |
-| Cleanarr | `cleanarr` | 5915 | `cleanarr.pancakefarts.xyz` | 192.168.1.104 |
-| LAZYLIBRARIAN | `lazylibrarian` | 5299 | `lazylibrarian.pancakefarts.xyz` | 192.168.1.104 |
-| Mylar3 | `mylar3` | 8090 | `mylar3.pancakefarts.xyz` | 192.168.1.104 |
-| PlexPosterUpdater | `plexposterupdater` | 5234 | `plexposters.pancakefarts.xyz` | 192.168.1.104 |
-| Tdarr | `tdarr` | 8264 | `tdarr.pancakefarts.xyz` | 192.168.1.104 |
-| Watchstate | `watchstate` | 4243 | `watchstate.pancakefarts.xyz` | 192.168.1.104 |
-| AdGuard Home | `adguard-home` | 3000 | `adguard.pancakefarts.xyz` | 192.168.1.3 |
-| Free-Games-Claimer | `free-games-claimer` | 6080 | `freegames.pancakefarts.xyz` | 192.168.1.104 |
+| Scrutiny | `scrutiny` | 5756 | `scrutiny.verasaidthat.ca` | 192.168.1.104 |
+| QDirStat | `qdirstat` | 7815 | `qdirstat.verasaidthat.ca` | 192.168.1.104 |
+| Scanopy | `scanopy-server-1` | 60072 | `scanopy.verasaidthat.ca` | 192.168.1.104 |
+| Profilarr | `profilarr` | 6868 | `profilarr.verasaidthat.ca` | 192.168.1.104 |
+| UnraidConfigGuardian | `unraidconfigguardian` | 7842 | `unraid-cfg.verasaidthat.ca` | 192.168.1.104 |
+| changedetection.io | `changedetection.io` | 5051 | `changedetection.verasaidthat.ca` | 192.168.1.104 |
+| Databasus | `databasus` | 4005 | `databasus.verasaidthat.ca` | 192.168.1.104 |
+| Calibre-Web | `calibre-web-automated` | 8083 | `calibre.verasaidthat.ca` | 192.168.1.104 |
+| Actual Budget | `actualserver` | 5006 | `actual.verasaidthat.ca` | 192.168.1.104 |
+| Bookshelf | `bookshelf` | 8587 | `bookshelf.verasaidthat.ca` | 192.168.1.104 |
+| Paperless-AI | `paperless-ai` | 3321 | `paperless.verasaidthat.ca` | 192.168.1.104 |
+| OpenBooks | `openbooks` | 8035 | `openbooks.verasaidthat.ca` | 192.168.1.104 |
+| LubeLogger | `lubelogger` | 8780 | `lubelogger.verasaidthat.ca` | 192.168.1.104 |
+| Shelfmark | `shelfmark` | 8084 | `shelfmark.verasaidthat.ca` | 192.168.1.104 |
+| SoulSync | `soulsync` | 8008 | `soulsync.verasaidthat.ca` | 192.168.1.104 |
+| Termix | `termix` | 30001 | `termix.verasaidthat.ca` | 192.168.1.104 |
+| Maintainerr | `maintainerr` | 6246 | `maintainerr.verasaidthat.ca` | 192.168.1.104 |
+| Hound | `hound-server` | 2323 | `hound.verasaidthat.ca` | 192.168.1.104 |
+| Houndarr | `houndarr` | 2635 | `houndarr.verasaidthat.ca` | 192.168.1.104 |
+| Mediamanager | `mediamanager-mediamanager-1` | 3060 | `mediamanager.verasaidthat.ca` | 192.168.1.104 |
+| Plex2Letterboxd | `plex2letterboxd-frontend` | 5670 | `p2l.verasaidthat.ca` | 192.168.1.104 |
+| YACReader | `yacreaderlibraryserver` | 8761 | `yacreader.verasaidthat.ca` | 192.168.1.104 |
+| EbookBuddy | `ebookbuddy` | 5110 | `ebookbuddy.verasaidthat.ca` | 192.168.1.104 |
+| Beets | `beets` | 8337 | `beets.verasaidthat.ca` | 192.168.1.104 |
+| Kapowarr | `kapowarr` | 5656 | `kapowarr.verasaidthat.ca` | 192.168.1.104 |
+| Explo | `explo` | 7288 | `explo.verasaidthat.ca` | 192.168.1.104 |
+| Cleanarr | `cleanarr` | 5915 | `cleanarr.verasaidthat.ca` | 192.168.1.104 |
+| LAZYLIBRARIAN | `lazylibrarian` | 5299 | `lazylibrarian.verasaidthat.ca` | 192.168.1.104 |
+| Mylar3 | `mylar3` | 8090 | `mylar3.verasaidthat.ca` | 192.168.1.104 |
+| PlexPosterUpdater | `plexposterupdater` | 5234 | `plexposters.verasaidthat.ca` | 192.168.1.104 |
+| Tdarr | `tdarr` | 8264 | `tdarr.verasaidthat.ca` | 192.168.1.104 |
+| Watchstate | `watchstate` | 4243 | `watchstate.verasaidthat.ca` | 192.168.1.104 |
+| AdGuard Home | `adguard-home` | 3000 | `adguard.verasaidthat.ca` | 192.168.1.3 |
+| Free-Games-Claimer | `free-games-claimer` | 6080 | `freegames.verasaidthat.ca` | 192.168.1.104 |
 | Plex-Media-Server | (TrueNAS) | 32400 | (already on `plex.pancakefarts.xyz` if set) | 192.168.1.122 |
 
 **Already on `.xyz` with valid certs (12 services, no action):** auth, nextcloud, immich, owu, mesh, borg, oauth2proxy, ssh, tug, ha, searxng, yacy, epic (some have access_list but all are working). Plus 3 apex rows for `pancakefarts.xyz`.
@@ -205,7 +264,7 @@ put("/proxy/network/api/s/default/rest/networkconf/6a015216222f682c917104af", {
 })
 ```
 
-**Verify:** `dig @192.168.1.3 pancakefarts.xyz` → still 173.181.99.119 (no rewrite yet, but resolver is reachable). `dig @192.168.1.1 pancakefarts.xyz` → still 173.181.99.119 (UCG passes through).
+**Verify:** `dig @192.168.1.3 verasaidthat.ca` → still 162.255.119.41 (Namecheap parking, no rewrite yet but resolver is reachable). `dig @192.168.1.1 verasaidthat.ca` → still 162.255.119.41 (UCG passes through).
 
 ### Step 2 — Populate AdGuard's rewrites (10 min, the AdGuard REST API)
 
@@ -217,9 +276,9 @@ AG_BASE = "http://192.168.1.3:3000"
 # Need AdGuard admin creds — saved in 1Password? Or set up.
 
 rewrites = [
-    ("homepage.pancakefarts.xyz",   "192.168.1.104"),
-    ("jellyfin.pancakefarts.xyz",   "192.168.1.104"),
-    ("seerr.pancakefarts.xyz",      "192.168.1.104"),
+    ("homepage.verasaidthat.ca",   "192.168.1.104"),
+    ("jellyfin.verasaidthat.ca",   "192.168.1.104"),
+    ("seerr.verasaidthat.ca",      "192.168.1.104"),
     # ... 50+ entries
 ]
 for domain, answer in rewrites:
@@ -227,35 +286,34 @@ for domain, answer in rewrites:
     ...
 ```
 
-**Verify:** `dig +short @192.168.1.3 homepage.pancakefarts.xyz` → should return 192.168.1.104. `dig +short @1.1.1.1 homepage.pancakefarts.xyz` → should return 173.181.99.119 (public IP). **Same hostname, two answers = split-horizon working.**
+**Verify:** `dig +short @192.168.1.3 homepage.verasaidthat.ca` → should return 192.168.1.104. `dig +short @1.1.1.1 homepage.verasaidthat.ca` → should return 173.181.99.119 (public IP). **Same hostname, two answers = split-horizon working.**
 
 ### Step 3 — Add wildcard LE cert to npmplus (10 min, webUI)
 
-In npmplus UI: Settings → SSL Certificates → Add → Let's Encrypt → DNS Challenge with Cloudflare API token → Domains: `*.pancakefarts.xyz, pancakefarts.xyz` → Request. Should issue in 30s.
+In npmplus UI: Settings → SSL Certificates → Add → Let's Encrypt → DNS Challenge with Cloudflare API token → Domains: `*.verasaidthat.ca, verasaidthat.ca` → Request. Should issue in 30s.
 
-### Step 4 — Add Cloudflare DNS A records (one curl per hostname, 10 min)
+### Step 4 — Cloudflare DNS: TXT record for DNS-01 only (5 min, the user)
 
-```bash
-CF_TOKEN="<zone-scoped token from 1Password>"
-ZONE_ID="<the pancakefarts.xyz zone id>"
-for hostname in $(cat /tmp/hostname_list.txt); do
-  curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
-    -H "Authorization: Bearer $CF_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"type\":\"A\",\"name\":\"$hostname\",\"content\":\"173.181.99.119\",\"proxied\":false}" \
-    | python3 -c "import sys, json; d=json.load(sys.stdin); print(f'{d.get(\"result\",{}).get(\"name\",\"?\")}: {\"OK\" if d.get(\"success\") else d.get(\"errors\")}')"
-done
-```
+**No public A records are needed for the service hostnames.** The wildcard cert is valid for any `*.verasaidthat.ca` regardless of whether those A records exist. The LAN DNS (UCG split-horizon) provides the actual hostname resolution. So the only public DNS record we need is the **DNS-01 challenge TXT** at the apex, which is set automatically by the certbot plugin during issuance/renewal.
 
-`-proxied:false` (grey cloud) — same as existing records.
+**In Cloudflare (if you migrated) or Namecheap DNS (if you didn't):**
+- The certbot `dns-cloudflare` plugin creates and removes the TXT record `_acme-challenge.verasaidthat.ca` automatically each time it issues or renews the cert.
+- You don't need to manually add anything to the zone.
+
+**Note:** if you ever want a public landing page or such on `verasaidthat.ca`, you can add an apex A record at that time. The cert is independent of the A records.
 
 ### Step 5 — Bulk-add proxy_hosts in npmplus (20 min, scripted SQL)
 
 For each hostname in the agreed list, insert a row in `proxy_host` pointing at the wildcard cert and the right backend. Restart npmplus.
 
-### Step 6 — Migrate existing 12 `.xyz` proxy_hosts to the wildcard cert (10 min, one UPDATE)
+### Step 6 — Existing 12 `.xyz` proxy_hosts (no action, separate zone)
+
+**The 12 existing services on `pancakefarts.xyz` (npmplus-managed, externally exposed) are not part of this plan.** They have their own per-hostname certs and their own DNS zone, and stay as-is. The `*.verasaidthat.ca` wildcard cert only covers the new internal services.
+
+If you ever want to consolidate them under a wildcard cert, that's a separate workstream — but the migration script below is a reference, not part of this rollout:
 
 ```sql
+-- (FOR REFERENCE ONLY — DO NOT RUN as part of this plan)
 UPDATE proxy_host SET certificate_id = (SELECT id FROM certificate WHERE nice_name LIKE '%pancakefarts%' AND domain_names LIKE '%*.pancakefarts.xyz%')
 WHERE enabled = 1 AND domain_names LIKE '%pancakefarts.xyz%';
 -- Then hard-delete the now-orphaned per-hostname certs (with backup)
@@ -264,8 +322,8 @@ WHERE enabled = 1 AND domain_names LIKE '%pancakefarts.xyz%';
 ### Step 7 — End-to-end verify (10 min)
 
 From a laptop on Wi-Fi:
-- `dig homepage.pancakefarts.xyz` → 192.168.1.104 (the AdGuard answer)
-- `curl -I https://homepage.pancakefarts.xyz` → 200, cert shows `*.pancakefarts.xyz` SAN
+- `dig homepage.verasaidthat.ca` → 192.168.1.104 (the AdGuard answer)
+- `curl -I https://homepage.verasaidthat.ca` → 200, cert shows `*.verasaidthat.ca` SAN
 - Open in browser → no cert warning
 - From phone on cellular: same checks, just the IP differs
 
@@ -292,5 +350,8 @@ From a laptop on Wi-Fi:
 - **Not migrating the 6 npmplus proxy_hosts with no auth_request** (the OIDC enforcement check from the reconciliation doc — separate work)
 - **Not fixing the DHCP relay to .254** (a real bug, but not in scope of TLS)
 - **Not setting `dhcpd_dns_enabled: true` on the IoT network** (it's set as part of Step 1)
-- **Not creating a Cloudflare API token** (you do this, save in 1Password)
-- **Not migrating the existing 3-row `pancakefarts.xyz` apex** (those are intentional, leave alone)
+- **Not creating a Cloudflare API token** for `verasaidthat.ca` (you do this, save in 1Password; if migrating the zone to Cloudflare, also update NS at Namecheap)
+- **Not migrating the `pancakefarts.xyz` zone to Cloudflare** (out of scope; only `verasaidthat.ca` is in scope for the new Cloudflare move if you choose it)
+- **Not migrating the existing 3-row `pancakefarts.xyz` apex** (those are external services, leave alone)
+- **Not moving the existing email forwarding** for `@verasaidthat.ca` to Cloudflare Email Routing (separate workstream; only relevant if you actually receive mail at that domain)
+- **Not exposing any `verasaidthat.ca` service to the public internet** (no port forwards, no Cloudflare proxy) — this is the hard requirement, not an oversight
