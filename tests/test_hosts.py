@@ -132,6 +132,46 @@ def test_remote_ssh_connect_uses_asyncssh_config_kwarg() -> None:
     )
 
 
+def test_remote_ssh_run_uses_returncode_not_exit_code() -> None:
+    """Regression: asyncssh 2.x renamed subprocess-style exit_code → returncode.
+
+    The old ``completed.exit_code`` attribute is gone; the code must read
+    ``completed.returncode``. This test stubs the connection's run() and
+    asserts ``_run()`` produces a CommandResult with the right exit code
+    rather than blowing up with AttributeError.
+    """
+    class _FakeCompleted:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    class _FakeConn:
+        is_closed = False  # _connect() will reuse this, no DNS lookup
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+        async def run(self, *args, **kwargs):
+            return _FakeCompleted()
+
+    h = RemoteSSH(
+        name="unraid", ssh_alias="unraid",
+        ssh_config_path="/dev/null", verify_config=False,
+    )
+    h._conn = _FakeConn()  # type: ignore[attr-defined]
+
+    async def _exercise() -> None:
+        result = await h._run("whoami")  # type: ignore[attr-defined]
+        assert result.exit_code == 0
+        assert result.stdout == "ok\n"
+        assert result.ok is True
+
+    asyncio.run(_exercise())
+
+
 def test_remote_ssh_satisfies_hostclient_protocol() -> None:
     """RemoteSSH is structurally a HostClient."""
     h = RemoteSSH(name="x", ssh_alias="x", ssh_config_path="/dev/null", verify_config=False)

@@ -84,7 +84,7 @@ class RemoteSSH:
             return CommandResult(1, "", f"{type(e).__name__}: {e}",
                                  int((time.monotonic() - t0) * 1000))
         return CommandResult(
-            completed.exit_code or 0,
+            completed.returncode or 0,
             completed.stdout or "",
             completed.stderr or "",
             int((time.monotonic() - t0) * 1000),
