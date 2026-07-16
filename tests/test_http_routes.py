@@ -189,10 +189,10 @@ async def test_handle_sse_returns_response_after_disconnect() -> None:
         yield (AsyncMock(), AsyncMock())
 
     mcp = _build_minimal_mcp_instance()
-    with patch.object(sse_mod, "SseServerTransport") as MockSSE:
+    with patch.object(sse_mod, "SseServerTransport") as mock_sse_cls:
         mock_sse_instance = MagicMock()
         mock_sse_instance.connect_sse = _noop_connect_sse
-        MockSSE.return_value = mock_sse_instance
+        mock_sse_cls.return_value = mock_sse_instance
         app = build_sse_app(mcp, get_state=None)
         for route in app.router.routes:
             if getattr(route, "path", None) == "/sse":
