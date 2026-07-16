@@ -55,11 +55,17 @@ commit messages; this file is the human-readable summary.
   a multi-stage build that bundles `docker` CLI, or the
   local host to be reconfigured as `RemoteSSH`. Not in
   scope for 0.4.0; tracked for a future patch release.
+  Workaround for the local host: SSH in and run
+  `cd /mnt/Data/appdata/dockge/stacks/<stack> && docker compose pull && docker compose up -d`
+  by hand. `dry_run=True` still works as a preview.
 - **MCP bridge flaps on daemon restart**: the hermes-agent
   SSE client takes 60+ seconds to recover after a homelab-mcp
   container recreate, and during that window all tool calls
   time out. Pre-existing, not specific to 0.4.0. Workaround:
   open a new WebUI chat session after any daemon restart.
+  The 180s timeout on tool calls is intentional — it gives
+  the bridge time to recover on its own without throwing
+  errors at the LLM.
 
 ## [0.3.0] — 2026-07-15
 
