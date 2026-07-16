@@ -78,11 +78,17 @@ def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
     """
     from mcp.server.sse import SseServerTransport  # type: ignore[import-not-found]
     from starlette.applications import Starlette
+    from starlette.responses import Response
     from starlette.routing import Route
 
     sse = SseServerTransport("/messages")
 
     async def handle_sse(request: Any) -> Any:
+        # The MCP library's docstring explicitly warns: the SSE handler
+        # MUST return a Response after connect_sse ends, otherwise
+        # starlette/uvicorn throws "TypeError: 'NoneType' object is not
+        # callable" when the client disconnects mid-stream. This is the
+        # root cause of the long-standing hermes-agent bridge flap.
         async with sse.connect_sse(
             request.scope, request.receive, request._send  # type: ignore[attr-defined]
         ) as streams:
@@ -91,6 +97,7 @@ def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
                 streams[1],
                 mcp_instance._mcp_server.create_initialization_options(),  # type: ignore[attr-defined]
             )
+        return Response()
 
     async def handle_messages(request: Any) -> Any:
         await sse.handle_post_message(request.scope, request.receive, request._send)
