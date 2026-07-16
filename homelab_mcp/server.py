@@ -93,9 +93,11 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.memory
     import homelab_mcp.tools.ollama
     import homelab_mcp.tools.plex
+    import homelab_mcp.tools.preflight
     import homelab_mcp.tools.recipes
     import homelab_mcp.tools.searxng
     import homelab_mcp.tools.stacks
+    import homelab_mcp.tools.suggest
     import homelab_mcp.tools.updates  # noqa: F401
 
 
