@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # --- preflight_check_tool ---------------------------------------------------
 
 
@@ -133,14 +132,15 @@ async def test_preflight_blocks_dismiss_pending_when_stack_broken() -> None:
 
 
 async def test_preflight_warns_apply_update_without_last_known_good() -> None:
+    import tempfile
+
     from homelab_mcp import server
     from homelab_mcp.tools.preflight import preflight_check_tool
-    from homelab_mcp.tools._state import get_state
-    import tempfile
 
     # Use a real State on a temp DB; last_known_good returns None for empty
     with tempfile.TemporaryDirectory() as tmp:
         from pathlib import Path
+
         from homelab_mcp.state import State
         s = State(db_path=Path(tmp) / "test.db")
         await s.init_db()

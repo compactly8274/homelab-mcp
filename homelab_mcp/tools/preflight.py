@@ -36,7 +36,6 @@ Returns a structured verdict the LLM (or a human) can act on:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any
@@ -78,9 +77,7 @@ def _is_in_restart_loop(container: dict[str, Any]) -> bool:
     if _RESTARTING_RE.search(state_str):
         return True
     restart_count = int(container.get("RestartCount") or 0)
-    if restart_count > _MAX_RESTART_COUNT and state_str not in ("running",):
-        return True
-    return False
+    return restart_count > _MAX_RESTART_COUNT and state_str not in ("running",)
 
 
 async def _gather(host: str, stack: str) -> dict[str, Any]:
@@ -215,13 +212,12 @@ async def preflight_check_tool(
         # currently running the stack? Dismissing the drift while
         # the stack is healthy is fine; if the stack is broken it's
         # hiding a real problem.
-        if action == "dismiss_pending":
-            if status not in ("running",):
-                blockers.append(
-                    f"{name} is not running (status={status!r}). "
-                    f"Dismissing a pending update for a broken stack hides the problem. "
-                    f"Fix the stack first, THEN dismiss."
-                )
+        if action == "dismiss_pending" and status not in ("running",):
+            blockers.append(
+                f"{name} is not running (status={status!r}). "
+                f"Dismissing a pending update for a broken stack hides the problem. "
+                f"Fix the stack first, THEN dismiss."
+            )
 
     # Multi-container in same stack: removing the parent orphans
     # dependents. ``data["inspect"]`` contains the per-container

@@ -29,7 +29,6 @@ import logging
 from typing import Any
 
 from homelab_mcp.server import mcp
-from homelab_mcp.tools._state import get_state
 from homelab_mcp.tools.memory import _get_memory  # type: ignore[attr-defined]
 
 log = logging.getLogger(__name__)
@@ -60,7 +59,6 @@ async def suggest_memories_tool(
     Returns:
         List of {namespace, key, content, importance, rationale}.
     """
-    state = get_state()
     mem = _get_memory()
     suggestions: list[dict[str, Any]] = []
 
@@ -71,7 +69,6 @@ async def suggest_memories_tool(
         # The state layer exposes per-(host, stack) history. We
         # need a global "recent" view. Since the API only supports
         # per-stack, we look at hosts in the host_clients map.
-        from homelab_mcp import server as _server
         # Pull the most recent 20 from each configured host
         # (the function takes (host, stack), so we list_pending as
         # a proxy for "what stacks exist" + a small unknown sample).
