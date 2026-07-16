@@ -6,7 +6,47 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
-## [0.4.1] — 2026-07-16
+## [0.6.0] — 2026-07-16
+
+### Added
+- **`preflight_check_tool(host, stack, action)`**: pre-flight
+  check before destructive ops. Returns
+  `{safe, blockers, warnings, info, suggested_alternative}`
+  for 5 action types: remove / stop / restart / apply_update
+  / dismiss_pending. Detects the patterns that have caused
+  real damage before:
+  - container in restart loop (FGC chromium pattern, warn)
+  - container started <60s ago (Apply storm, warn)
+  - apply_update with no last-known-good image (warn)
+  - dismiss_pending on a broken stack (block)
+  - remove on a multi-container stack (block — would orphan)
+  - unknown stack name on a known host (block)
+  - unknown host (block)
+  The Lidarr/qBittorrent 11-album MEAL on 2026-07-16 would
+  have been caught by this tool. Conservative in v0.6.0: it
+  returns a verdict but does NOT block actions. The LLM (or
+  user) is expected to honor the verdict; a future patch will
+  wire it into the destructive tool functions themselves.
+- **`suggest_memories_tool(since_minutes, max_suggestions)`**:
+  surface "store this?" candidates from recent memory
+  activity. Heuristic: tags that appear 3+ times in recent
+  notes are flagged as a recurring theme. Does NOT auto-store;
+  the LLM presents candidates and the user confirms.
+
+### Fixed (caught during live testing)
+- `preflight_check_tool` returned `safe=True, 0 blockers` when
+  given an unknown stack name on a known host. Now blocks with
+  "no container or stack named X found on Y. Refusing to act
+  on a non-existent target." This was a silent-green-light path
+  that would have allowed the LLM to "remove" a non-existent
+  container.
+
+### Tests
+- 11 new tests in `tests/test_preflight_suggest.py` covering
+  all the safety cases plus 3 suggest-tool cases.
+- 310 passed, 10 skipped (up from 299 in v0.5.0).
+
+## [0.5.0] — 2026-07-16
 
 ### Fixed
 - **C-side: hermes-agent MCP bridge flap (root cause)**: the
