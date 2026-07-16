@@ -134,6 +134,7 @@ async def evaluate_and_act(
     llm_api_key: str = "",
     llm_model: str = "",
     llm_timeout: float = 30.0,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Decide and act on a single pending update.
 
@@ -179,6 +180,19 @@ async def evaluate_and_act(
 
     # 3. Apply the policy.
     if verdict.risk == "BREAKING":
+        if dry_run:
+            # Don't even notify in dry_run — return the plan only.
+            return {
+                "action": "dry_run",
+                "would_apply": False,
+                "verdict": verdict.to_dict(),
+                "notes_source": notes.source if notes else "",
+                "stack_dir": stack_dir,
+                "to_digest": inputs.to_digest,
+                "image": inputs.image,
+                "policy": policy,
+                "dry_run": True,
+            }
         await _notify_breaking(notifier, image=inputs.image, stack=project, verdict=verdict, notes=notes)
         return {
             "action": "notified_breaking",
@@ -188,9 +202,32 @@ async def evaluate_and_act(
         }
 
     if verdict.risk == "SAFE":
-        pass
+        if dry_run:
+            return {
+                "action": "dry_run",
+                "would_apply": True,
+                "verdict": verdict.to_dict(),
+                "notes_source": notes.source if notes else "",
+                "stack_dir": stack_dir,
+                "to_digest": inputs.to_digest,
+                "image": inputs.image,
+                "policy": policy,
+                "dry_run": True,
+            }
     else:  # CAUTION
         if policy == "safe-only":
+            if dry_run:
+                return {
+                    "action": "dry_run",
+                    "would_apply": False,
+                    "verdict": verdict.to_dict(),
+                    "notes_source": notes.source if notes else "",
+                    "stack_dir": stack_dir,
+                    "to_digest": inputs.to_digest,
+                    "image": inputs.image,
+                    "policy": policy,
+                    "dry_run": True,
+                }
             await _notify_caution(
                 notifier, image=inputs.image, stack=project,
                 verdict=verdict, notes=notes,
@@ -200,6 +237,18 @@ async def evaluate_and_act(
                 "verdict": verdict.to_dict(),
                 "notes_source": notes.source if notes else "",
                 "stack_dir": stack_dir,
+            }
+        if dry_run:
+            return {
+                "action": "dry_run",
+                "would_apply": True,
+                "verdict": verdict.to_dict(),
+                "notes_source": notes.source if notes else "",
+                "stack_dir": stack_dir,
+                "to_digest": inputs.to_digest,
+                "image": inputs.image,
+                "policy": policy,
+                "dry_run": True,
             }
 
     # 4. Apply.

@@ -27,6 +27,7 @@ async def apply_all_pending_tool(
     host: str,
     force: bool = False,
     max_rows: int = 50,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Apply every pending update for a host, one stack at a time.
 
@@ -38,6 +39,11 @@ async def apply_all_pending_tool(
         If True, the per-row apply_update call uses force=True,
         which overrides safe-only to apply BREAKING updates. The
         healthcheck + rollback still run.
+    dry_run : bool, default False
+        If True, classify every pending update (SAFE / CAUTION /
+        BREAKING) WITHOUT actually applying. Returns a list of
+        ``would_apply: bool`` per stack so you can preview what the
+        policy would do. Safe to call on production.
     max_rows : int, default 50
         Safety cap on how many rows to process in a single call.
         Prevents runaway applies if something has gone wrong and
@@ -73,7 +79,7 @@ async def apply_all_pending_tool(
     rows = pending[:max_rows]
     results: list[dict[str, Any]] = []
     counts = {"applied": 0, "notified_breaking": 0, "notified_caution": 0,
-              "failed": 0, "no_pending_update": 0, "other": 0}
+              "failed": 0, "no_pending_update": 0, "dry_run": 0, "other": 0}
     for row in rows:
         stack = row.get("stack", "")
         if not stack:
@@ -83,7 +89,7 @@ async def apply_all_pending_tool(
             # calls list_pending_updates again internally; that's
             # a small redundant read but keeps the code path
             # uniform with single-row applies.
-            r = await apply_update_tool(host=host, stack=stack, force=force)
+            r = await apply_update_tool(host=host, stack=stack, force=force, dry_run=dry_run)
         except Exception as e:
             log.exception("apply_all_pending: row %s/%s raised: %s", host, stack, e)
             r = {"action": "failed", "host": host, "stack": stack, "error": str(e)}
@@ -99,6 +105,7 @@ async def apply_all_pending_tool(
         "applied": counts["applied"],
         "notified_breaking": counts["notified_breaking"],
         "notified_caution": counts["notified_caution"],
+        "dry_run": counts["dry_run"],
         "failed": counts["failed"],
         "results": results,
     }

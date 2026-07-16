@@ -74,6 +74,7 @@ async def apply_update_tool(
     host: str,
     stack: str,
     force: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Apply the latest pending update for a (host, stack).
 
@@ -103,6 +104,12 @@ async def apply_update_tool(
         classified the update as BREAKING. **Use with care.**
         This bypasses the safe-and-caution / safe-only policy but
         does NOT bypass healthcheck + rollback — those still run.
+    dry_run : bool, default False
+        If True, return the LLM's risk classification and the plan
+        (would_apply, to_digest, stack_dir, notes_source) WITHOUT
+        snapshotting, pulling, or restarting anything. Safe to call
+        on any stack. Combine with ``force=False`` to preview what
+        the policy would do.
 
     Returns
     -------
@@ -192,6 +199,7 @@ async def apply_update_tool(
             llm_api_key=settings.llm_api_key,
             llm_model=settings.llm_model,
             llm_timeout=float(settings.llm_timeout),
+            dry_run=dry_run,
         )
     except Exception as e:
         log.exception("apply_update_tool raised: %s", e)
@@ -210,4 +218,5 @@ async def apply_update_tool(
     result["to_digest"] = to_digest
     result["policy"] = effective_policy
     result["forced"] = force
+    result["dry_run"] = dry_run
     return result

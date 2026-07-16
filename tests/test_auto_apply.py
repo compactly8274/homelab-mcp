@@ -340,3 +340,127 @@ async def test_apply_failure_returns_action_failed() -> None:
         run_pipeline=_boom, notifier=MagicMock(notify=AsyncMock()),
     )
     assert out["action"] == "failed"
+
+
+# -- dry_run --------------------------------------------------------------
+
+
+async def test_dry_run_safe_returns_would_apply_true() -> None:
+    """dry_run=True with SAFE verdict: returns action=dry_run, would_apply=True,
+    and run_pipeline is never called."""
+    state = State(db_path=Path("/tmp/auto_apply_dry_safe.db"))
+    await state.init_db()
+    await state.record_pending_update(
+        host="unraid", stack="radarr",
+        current_digest="sha256:" + "a" * 64,
+        latest_digest="sha256:" + "b" * 64,
+    )
+    host = _FakeHost("unraid", {
+        "Config": {
+            "Image": "ghcr.io/owner/img:latest",
+            "Labels": {"com.docker.compose.project": "radarr"},
+        },
+        "RepoDigests": ["x@sha256:" + "b" * 64],
+    })
+    pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
+    notifier = MagicMock(notify=AsyncMock())
+
+    out = await evaluate_and_act(
+        host=host, state=state, inputs=_make_inputs(),
+        fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v1", source="github_release")),
+        classify_release_notes=AsyncMock(return_value=RiskVerdict(risk="SAFE", summary="bug fix")),
+        run_pipeline=pipeline, notifier=notifier,
+        dry_run=True,
+    )
+    assert out["action"] == "dry_run"
+    assert out["would_apply"] is True
+    assert out["dry_run"] is True
+    assert out["verdict"]["risk"] == "SAFE"
+    pipeline.assert_not_called()
+    notifier.notify.assert_not_called()
+
+
+async def test_dry_run_caution_under_default_would_apply_true() -> None:
+    """dry_run=True with CAUTION + safe-and-caution: would_apply=True."""
+    state = State(db_path=Path("/tmp/auto_apply_dry_caution.db"))
+    await state.init_db()
+    host = _FakeHost("unraid", {
+        "Config": {
+            "Image": "x:latest",
+            "Labels": {"com.docker.compose.project": "radarr"},
+        },
+        "RepoDigests": [],
+    })
+    pipeline = AsyncMock(return_value={"ok": True})
+    notifier = MagicMock(notify=AsyncMock())
+
+    out = await evaluate_and_act(
+        host=host, state=state, inputs=_make_inputs(),
+        fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v2", source="github_release")),
+        classify_release_notes=AsyncMock(return_value=RiskVerdict(risk="CAUTION", summary="careful")),
+        run_pipeline=pipeline, notifier=notifier,
+        policy="safe-and-caution",
+        dry_run=True,
+    )
+    assert out["action"] == "dry_run"
+    assert out["would_apply"] is True
+    assert out["verdict"]["risk"] == "CAUTION"
+    pipeline.assert_not_called()
+
+
+async def test_dry_run_caution_under_safe_only_would_apply_false() -> None:
+    """dry_run=True with CAUTION + safe-only: would_apply=False."""
+    state = State(db_path=Path("/tmp/auto_apply_dry_caution_safeonly.db"))
+    await state.init_db()
+    host = _FakeHost("unraid", {
+        "Config": {
+            "Image": "x:latest",
+            "Labels": {"com.docker.compose.project": "radarr"},
+        },
+        "RepoDigests": [],
+    })
+    pipeline = AsyncMock(return_value={"ok": True})
+    notifier = MagicMock(notify=AsyncMock())
+
+    out = await evaluate_and_act(
+        host=host, state=state, inputs=_make_inputs(),
+        fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v2", source="github_release")),
+        classify_release_notes=AsyncMock(return_value=RiskVerdict(risk="CAUTION", summary="careful")),
+        run_pipeline=pipeline, notifier=notifier,
+        policy="safe-only",
+        dry_run=True,
+    )
+    assert out["action"] == "dry_run"
+    assert out["would_apply"] is False
+    assert out["verdict"]["risk"] == "CAUTION"
+    pipeline.assert_not_called()
+
+
+async def test_dry_run_breaking_short_circuits_before_notify() -> None:
+    """dry_run=True with BREAKING: returns action=dry_run with would_apply=False,
+    and NOTIFY is suppressed (we're previewing, not actually notifying)."""
+    state = State(db_path=Path("/tmp/auto_apply_dry_breaking.db"))
+    await state.init_db()
+    host = _FakeHost("unraid", {
+        "Config": {
+            "Image": "x:latest",
+            "Labels": {"com.docker.compose.project": "radarr"},
+        },
+        "RepoDigests": [],
+    })
+    pipeline = AsyncMock(return_value={"ok": True})
+    notifier = MagicMock(notify=AsyncMock())
+
+    out = await evaluate_and_act(
+        host=host, state=state, inputs=_make_inputs(),
+        fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v3", source="github_release")),
+        classify_release_notes=AsyncMock(return_value=RiskVerdict(risk="BREAKING", summary="config migration")),
+        run_pipeline=pipeline, notifier=notifier,
+        dry_run=True,
+    )
+    # BREAKING + dry_run: action=dry_run, would_apply=False, no notify
+    assert out["action"] == "dry_run"
+    assert out["would_apply"] is False
+    assert out["verdict"]["risk"] == "BREAKING"
+    pipeline.assert_not_called()
+    notifier.notify.assert_not_called()

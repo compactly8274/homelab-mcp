@@ -45,7 +45,7 @@ async def test_apply_all_pending_processes_each_row_in_isolation() -> None:
         "jellyfin":  {"action": "failed", "error": "docker socket down"},
     }
 
-    async def fake_apply(host: str, stack: str, force: bool = False) -> dict:
+    async def fake_apply(host: str, stack: str, force: bool = False, dry_run: bool = False) -> dict:
         return outcomes.get(stack, {"action": "failed", "error": "unknown"})
 
     with patch("homelab_mcp.tools.apply_all_pending.get_state", return_value=fake_state), \

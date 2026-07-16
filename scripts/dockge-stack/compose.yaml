@@ -38,6 +38,12 @@ services:
       HOMELAB_MCP_AUTO_APPLY_POLICY: ${HOMELAB_MCP_AUTO_APPLY_POLICY:-safe-and-caution}
       HOMELAB_MCP_LOCAL_HOST_ALIAS: ${HOMELAB_MCP_LOCAL_HOST_ALIAS:-truenas}
       HOMELAB_MCP_DOCKGE_STACKS_ROOT: ${HOMELAB_MCP_DOCKGE_STACKS_ROOT:-/mnt/Data/appdata/dockge/stacks}
+      # v0.2.0 — service integrations (read-only tools)
+      HOMELAB_MCP_PLEX_TOKEN: ${HOMELAB_MCP_PLEX_TOKEN:-}
+      HOMELAB_MCP_SONARR_API_KEY: ${HOMELAB_MCP_SONARR_API_KEY:-}
+      HOMELAB_MCP_RADARR_API_KEY: ${HOMELAB_MCP_RADARR_API_KEY:-}
+      HOMELAB_MCP_LIDARR_API_KEY: ${HOMELAB_MCP_LIDARR_API_KEY:-}
+      HOMELAB_MCP_READARR_API_KEY: ${HOMELAB_MCP_READARR_API_KEY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://127.0.0.1:18790/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
       interval: 30s
