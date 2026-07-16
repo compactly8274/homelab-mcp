@@ -6,6 +6,41 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.4.1] — 2026-07-16
+
+### Fixed
+- **C-side: hermes-agent MCP bridge flap (root cause)**: the
+  homelab-mcp SSE handler was returning `None` from both
+  `/sse` and `/messages` endpoints. Starlette's `Route` class
+  expects every endpoint to return a `Response`; when given
+  `None`, it throws `TypeError: 'NoneType' object is not callable`
+  in `routing.py:62` on the next request. The MCP library's
+  own docstring explicitly documents the fix (return `Response()`
+  after `connect_sse` ends), but it was missing from
+  `homelab_mcp/http_routes.py`.
+  - **Symptom on the daemon side**: every SSE POST or
+    disconnect produced a `TypeError: 'NoneType' object is
+    not callable` exception in the uvicorn log, and a
+    `starlette/middleware/errors.py:164` traceback.
+  - **Symptom on the client side (hermes-agent)**: the SSE POST
+    got an `httpcore.ReadError` ("Error in post_writer" in the
+    log), the bridge entered a 60+ second reconnect loop, and
+    every `mcp__homelab__*` tool call timed out with
+    "MCP call timed out after 180.0s". This was making the
+    v0.3.0 memory tools and all 55 homelab-mcp tools
+    effectively unreachable from the WebUI LLM surface since
+    v0.4.0 was deployed.
+  - **Fix**: add `return Response()` to `handle_sse` after
+    `connect_sse` exits, and wrap `handle_post_message` in
+    `handle_messages` so it always returns a `Response` after
+    the inner handler does its own 202 Accepted send.
+  - **Tests**: 2 new tests in `tests/test_http_routes.py`
+    (`test_handle_sse_returns_response_after_disconnect` and
+    `test_handle_sse_code_returns_response_in_source`).
+- The first fix in this series (handle_sse) wasn't sufficient
+  on its own — the same NoneType error also fires on POST
+  /messages. The second fix wraps handle_post_message.
+
 ## [0.4.0] — 2026-07-16
 
 ### Added
@@ -66,6 +101,8 @@ commit messages; this file is the human-readable summary.
   The 180s timeout on tool calls is intentional — it gives
   the bridge time to recover on its own without throwing
   errors at the LLM.
+  - **This was actually caused by the v0.4.1 fix above**;
+    the 0.4.1 release removes this limitation entirely.
 
 ## [0.3.0] — 2026-07-15
 
