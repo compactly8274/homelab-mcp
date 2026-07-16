@@ -82,8 +82,11 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     _host_clients = hosts
     _state = state
     # Eagerly import the tool modules so their @mcp.tool() decorators run.
+    import homelab_mcp.tools.apply_all_pending
     import homelab_mcp.tools.apply_update
+    import homelab_mcp.tools.dismiss_all_pending
     import homelab_mcp.tools.events
+    import homelab_mcp.tools.get_update_history
     import homelab_mcp.tools.health
     import homelab_mcp.tools.stacks
     import homelab_mcp.tools.updates  # noqa: F401

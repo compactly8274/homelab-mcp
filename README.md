@@ -18,7 +18,26 @@ more downstream Docker hosts (Unraid, QNAP, etc.) over SSH.
 - **Image-drift visibility** (MCP tools, populates `pending_updates`):
   - `trigger_scan_tool` — on-demand scan of one or all hosts
   - `list_pending_updates_tool` — rows from the latest scan / cron
-  - `pending_update_dismiss_tool` — drop a row after deciding not to apply
+  - `pending_update_dismiss_tool` — drop one row after deciding not to apply
+  - `dismiss_all_pending_tool(host, stack=None)` — bulk-dismiss (one host
+    or one host+stack). Useful for blanket-ignoring a non-actionable drift.
+
+- **Smart update** (MCP tools, runs the full pipeline for one row at a time):
+  - `apply_update_tool(host, stack, force=False)` — fetch release notes →
+    LLM classify → policy gate → snapshot → pull → up -d → healthcheck →
+    rollback on failure. Returns `{action, verdict, apply_result}`. The
+    `force=True` override flips the policy so BREAKING still gets applied
+    (healthcheck + rollback still run).
+  - `apply_all_pending_tool(host, force=False, max_rows=50)` — bulk-apply
+    every pending row on a host. Per-row isolation: a single failure
+    doesn't stop the others. Returns per-row results + counts.
+  - `get_update_history_tool(host, stack, limit=20)` — past update
+    attempts (applied, failed, rolled_back) from the SQLite state DB.
+    Capped at 200 rows.
+
+- **HTTP endpoints** (for monitoring; not MCP tools):
+  - `GET /health` — `{status: "ok", uptime_seconds: N}`
+  - `GET /status` — daemon info + state DB summary
 
 - **Auto-update pipeline** (cron-style; one cycle at a time):
   - **Fetch release notes** — image → GitHub repo heuristic
@@ -153,7 +172,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 uv run pytest -q
 ```
 
-Currently 145 tests across:
+Currently 183 tests across:
 - config (env-var loading, validation)
 - state (SQLite CRUD, idempotent writes, busy_timeout)
 - hosts (LocalDocker + RemoteSSH, structural conformance to HostClient)
@@ -166,6 +185,10 @@ Currently 145 tests across:
 - updater.notifier_backends (Discord + Pushover: body building, network errors, MultiNotifier dispatch, error isolation)
 - updater.auto_apply (policy decisions, classifier-fail CAUTION fallback)
 - auto_apply_main (cron arg parsing, per-row exception isolation, summary)
+- tools.apply_update (smart-update pipeline: no-pending, BREAKING-notify, SAFE-apply, force-override)
+- tools.apply_all_pending (bulk apply with per-row isolation, max_rows cap)
+- tools.get_update_history (limit clamping, state forwarding)
+- tools.dismiss_all_pending (host-wide + stack-scoped dismiss, per-row error isolation)
 - server (FastMCP singleton, tool registration, build_hosts wiring)
 
 ### Live SSH tests (opt-in)
