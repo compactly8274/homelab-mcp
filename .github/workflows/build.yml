@@ -3,7 +3,12 @@ name: test-build-publish
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # Accept both 'vX.Y.Z' and 'X.Y.Z' tags. The repo convention (per
+    # MEMORY.md and the homelab-mcp image tag policy) is to publish
+    # GHCR images as 'X.Y.Z' (no v prefix); the v-prefix form is kept
+    # for symmetry with other repos and to make the version jump
+    # visually distinct in the tag list.
+    tags: ["v*", "[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
     branches: [main]
 
@@ -67,7 +72,8 @@ jobs:
     name: Publish to GHCR
     runs-on: ubuntu-latest
     needs: [test, build]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Match both 'refs/tags/vX.Y.Z' and 'refs/tags/X.Y.Z' (no-v form).
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
       - name: Log in to GHCR
@@ -83,7 +89,10 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Strip 'refs/tags/' and an optional 'v' prefix. Works for both
+          # 'v0.4.0' and '0.4.0' tag forms.
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
