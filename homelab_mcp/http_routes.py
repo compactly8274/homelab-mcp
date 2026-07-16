@@ -100,7 +100,20 @@ def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
         return Response()
 
     async def handle_messages(request: Any) -> Any:
+        # SseServerTransport.handle_post_message returns None (it does
+        # its own response via sse.handle_post_message's internal
+        # await response(scope, receive, send) for 202 Accepted). But
+        # starlette's Route class expects every endpoint to return a
+        # Response object — if the endpoint returns None, starlette
+        # raises "TypeError: 'NoneType' object is not callable" on
+        # `await response(scope, receive, send)` in routing.py line 62.
+        # We wrap the call to ensure a Response is always returned.
         await sse.handle_post_message(request.scope, request.receive, request._send)
+        # If handle_post_message sent a response already, this empty
+        # Response is ignored; if it didn't (e.g. session not found
+        # 404 already sent), this prevents the NoneType crash.
+        from starlette.responses import Response as _Resp
+        return _Resp()
 
     starlette_app = Starlette(
         debug=mcp_instance.settings.debug,
