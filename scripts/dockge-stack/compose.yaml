@@ -14,6 +14,9 @@ services:
     container_name: homelab-mcp
     restart: unless-stopped
     network_mode: host
+    user: "0:999"   # root uid, docker gid (999) — needs docker.sock rw
+    group_add:
+      - "999"       # docker gid, in case user: is overridden by the runtime
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /mnt/Data/appdata/homelab-mcp:/data

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import patch as _patch
+
 import pytest
 
 from homelab_mcp.hosts.base import CommandResult
@@ -88,6 +91,45 @@ def test_local_docker_satisfies_hostclient_protocol() -> None:
     from homelab_mcp.hosts.base import HostClient
     # Protocol's @runtime_checkable does structural checking
     assert isinstance(h, HostClient)
+
+
+def test_remote_ssh_connect_uses_asyncssh_config_kwarg() -> None:
+    """Regression: asyncssh>=2.18 moved config_path off connect(); we use config=[...].
+
+    Pins the connect-call shape so a future asyncssh upgrade (or accidental
+    re-introduction of `config_path=`) is caught.
+    """
+    captured: dict = {}
+
+    class _FakeConn:
+        is_closed = False
+
+        def close(self) -> None:
+            self.is_closed = True
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_connect(host, *args, **kwargs):
+        captured["host"] = host
+        captured["kwargs"] = kwargs
+        return _FakeConn()
+
+    h = RemoteSSH(
+        name="unraid", ssh_alias="unraid",
+        ssh_config_path="/dev/null", verify_config=False,
+    )
+    with _patch("homelab_mcp.hosts.remote_ssh.asyncssh.connect", _fake_connect):
+        asyncio.run(h._connect())  # type: ignore[attr-defined]
+
+    assert captured["host"] == "unraid"
+    assert "config" in captured["kwargs"], (
+        f"asyncssh.connect must be called with config=; got kwargs={captured['kwargs']}"
+    )
+    assert captured["kwargs"]["config"] == ["/dev/null"]
+    assert "config_path" not in captured["kwargs"], (
+        "config_path= is unsupported by asyncssh>=2.18; use config=[...]"
+    )
 
 
 def test_remote_ssh_satisfies_hostclient_protocol() -> None:

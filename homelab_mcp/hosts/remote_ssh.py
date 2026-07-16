@@ -60,9 +60,10 @@ class RemoteSSH:
 
     async def _connect(self) -> asyncssh.SSHClientConnection:
         if self._conn is None or self._conn.is_closed:
+            # asyncssh >=2.18 moved config_path off connect(); pass it via config=
             self._conn = await asyncssh.connect(
                 self._alias,
-                config_path=str(self._config_path),
+                config=[str(self._config_path)],
                 known_hosts=None,  # use ~/.ssh/known_hosts by default
             )
         return self._conn
