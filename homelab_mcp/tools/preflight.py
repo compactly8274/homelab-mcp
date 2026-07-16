@@ -153,6 +153,19 @@ async def preflight_check_tool(
             "safe": False, "blockers": blockers, "warnings": [], "info": info,
             "suggested_alternative": "Verify the host is reachable and the stack name is correct.",
         }
+    if not data["containers"] and not data["errors"]:
+        # No errors but no matching containers = unknown stack
+        blockers.append(
+            f"no container or stack named {stack!r} found on {host!r}. "
+            f"Refusing to act on a non-existent target."
+        )
+        return {
+            "safe": False, "blockers": blockers, "warnings": [], "info": info,
+            "suggested_alternative": (
+                f"Run list_stacks_tool(host={host!r}) to see available stacks, "
+                f"then re-call with the correct name."
+            ),
+        }
 
     # Per-container checks
     for ins in data["inspect"]:

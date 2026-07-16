@@ -49,6 +49,18 @@ async def test_preflight_rejects_unknown_host() -> None:
     assert any("unknown host" in b for b in r["blockers"])
 
 
+async def test_preflight_blocks_unknown_stack_on_known_host() -> None:
+    """A known host but a stack name that doesn't exist: must be blocked, not silent pass."""
+    from homelab_mcp import server
+    from homelab_mcp.tools.preflight import preflight_check_tool
+
+    h = _fake_host("truenas", containers=[{"NAME": "plex", "PROJECT": "plex"}])
+    server._host_clients = {"truenas": h}
+    r = await preflight_check_tool("truenas", "non_existent_xyz", "stop")
+    assert r["safe"] is False
+    assert any("not found" in b.lower() or "no container" in b.lower() for b in r["blockers"])
+
+
 async def test_preflight_clean_running_container_is_safe() -> None:
     from homelab_mcp import server
     from homelab_mcp.tools.preflight import preflight_check_tool
