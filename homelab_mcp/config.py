@@ -43,8 +43,18 @@ Env-var reference (all optional unless noted):
                                       ``http://192.168.1.7:8080``; used by
                                       the searxng_* tools)
 - ``HOMELAB_MCP_OLLAMA_URL``         Ollama base URL (default
-                                      ``http://192.168.1.104:11434``; used by
-                                      the ollama_* tools)
+                                     ``http://192.168.1.104:11434``; used by
+                                     the ollama_* tools)
+- ``HOMELAB_MCP_OLLAMA_ALLOW_PULL``   bool (default ``false``). When ``true``,
+                                     enables the ``ollama_pull_model`` write
+                                     tool. **LLMs can pull arbitrary models
+                                     (multi-GB downloads)** — keep off unless
+                                     you've audited the deployment.
+- ``HOMELAB_MCP_OLLAMA_ALLOW_DELETE`` bool (default ``false``). When ``true``,
+                                     enables the ``ollama_delete_model`` write
+                                     tool. **LLMs can delete downloaded
+                                     models** — keep off unless you've audited
+                                     the deployment.
 - ``HOMELAB_MCP_PLEX_URL``           Plex base URL (default
                                       ``http://192.168.1.104:32400``)
 - ``HOMELAB_MCP_PLEX_TOKEN``         Plex API token (X-Plex-Token); see
@@ -160,6 +170,8 @@ class Settings(BaseModel):
     # Service integrations
     searxng_url: str = "http://192.168.1.7:8080"
     ollama_url: str = "http://192.168.1.104:11434"
+    ollama_allow_pull: bool = False
+    ollama_allow_delete: bool = False
     plex_url: str = "http://192.168.1.104:32400"
     plex_token: str = ""
     immich_url: str = "http://192.168.1.104:2283"
@@ -265,6 +277,10 @@ class Settings(BaseModel):
             data["searxng_url"] = os.getenv("HOMELAB_MCP_SEARXNG_URL", "http://192.168.1.7:8080")
         if "ollama_url" not in data:
             data["ollama_url"] = os.getenv("HOMELAB_MCP_OLLAMA_URL", "http://192.168.1.104:11434")
+        if "ollama_allow_pull" not in data:
+            data["ollama_allow_pull"] = _env_bool("HOMELAB_MCP_OLLAMA_ALLOW_PULL", False)
+        if "ollama_allow_delete" not in data:
+            data["ollama_allow_delete"] = _env_bool("HOMELAB_MCP_OLLAMA_ALLOW_DELETE", False)
         if "plex_url" not in data:
             data["plex_url"] = os.getenv("HOMELAB_MCP_PLEX_URL", "http://192.168.1.104:32400")
         if "plex_token" not in data:

@@ -185,3 +185,164 @@ async def test_unknown_service_returns_error_list_for_queue() -> None:
     assert isinstance(result, list)
     assert len(result) == 1
     assert "error" in result[0]
+
+
+# -------------------------- multi-service search ------------------------
+
+
+async def test_arr_search_series_now_supports_all_services() -> None:
+    """Extended in v0.2.1: lookup works for sonarr/radarr/lidarr/readarr."""
+    with patch.object(arr, "_arr_request", new=AsyncMock(return_value=_ok([{"title": "X", "artistName": "X", "authorTitle": "A — B"}]))) as m:
+        result = await arr.arr_search_series("radarr", "matrix")
+    assert isinstance(result, list)
+    assert "title" in result[0]
+    args, _ = m.call_args
+    assert args[1] == "/movie/lookup"
+
+    with patch.object(arr, "_arr_request", new=AsyncMock(return_value=_ok([]))):
+        result = await arr.arr_search_series("lidarr", "radiohead")
+    assert isinstance(result, list)
+
+
+async def test_arr_search_series_unknown_service_still_errors() -> None:
+    result = await arr.arr_search_series("bazarr", "x")
+    assert isinstance(result, list)
+    assert "error" in result[0]
+
+
+# -------------------------- bulk / all-services -------------------------
+
+
+async def test_arr_status_all_returns_four_services() -> None:
+    """arr_status_all fans out to all 4 services in parallel."""
+    fake_status = {
+        "sonarr": {"version": "4.0.19.2979", "appName": "Sonarr", "instanceName": "x", "isProduction": True},
+        "radarr": {"version": "6.3.0.10514", "appName": "Radarr", "instanceName": "y", "isProduction": True},
+        "lidarr": {"version": "3.1.0.4875", "appName": "Lidarr", "instanceName": "z", "isProduction": True},
+        "readarr": {"version": "0.4.19.2811", "appName": "Readarr", "instanceName": "w", "isProduction": True},
+    }
+
+    async def fake_status_call(service: str) -> dict:
+        return {"service": service, "version": fake_status[service]["version"]}
+
+    with patch.object(arr, "arr_status", new=AsyncMock(side_effect=fake_status_call)) as m:
+        result = await arr.arr_status_all()
+    assert m.call_count == 4
+    assert set(result["services"].keys()) == {"sonarr", "radarr", "lidarr", "readarr"}
+    assert result["healthy_count"] == 4
+    assert result["total"] == 4
+
+
+async def test_arr_status_all_surfaces_exceptions() -> None:
+    """If one service raises, it should appear as an error in the result, not crash."""
+    async def fake_status_call(service: str) -> dict:
+        if service == "radarr":
+            raise RuntimeError("boom")
+        return {"service": service, "version": "1.0.0"}
+
+    with patch.object(arr, "arr_status", new=AsyncMock(side_effect=fake_status_call)):
+        result = await arr.arr_status_all()
+    assert "error" in result["services"]["radarr"]
+    assert result["healthy_count"] == 3
+
+
+async def test_arr_queue_all_returns_queues_and_totals() -> None:
+    fake_queues = {
+        "sonarr": [{"title": "S1"}, {"title": "S2"}],
+        "radarr": [],
+        "lidarr": [{"title": "L1"}],
+        "readarr": [{"error": "down"}],
+    }
+
+    async def fake_queue_call(service: str, limit: int = 25) -> list:
+        return fake_queues[service]
+
+    with patch.object(arr, "arr_queue", new=AsyncMock(side_effect=fake_queue_call)):
+        result = await arr.arr_queue_all(limit=10)
+    assert result["totals"]["sonarr"] == 2
+    assert result["totals"]["radarr"] == 0
+    assert result["totals"]["lidarr"] == 1
+    # readarr returned an error list — total should be 0
+    assert result["totals"]["readarr"] == 0
+
+
+async def test_arr_wanted_all_returns_wanted_and_totals() -> None:
+    fake_wanted = {
+        "sonarr": [{"title": "Missed Ep 1"}],
+        "radarr": [],
+        "lidarr": [],
+        "readarr": [],
+    }
+
+    async def fake_wanted_call(service: str, limit: int = 25) -> list:
+        return fake_wanted[service]
+
+    with patch.object(arr, "arr_wanted", new=AsyncMock(side_effect=fake_wanted_call)):
+        result = await arr.arr_wanted_all()
+    assert result["totals"]["sonarr"] == 1
+    assert result["totals"]["radarr"] == 0
+    assert "wanted" in result
+
+
+async def test_arr_search_all_fans_out_across_services() -> None:
+    fake_results = {
+        "sonarr": [{"title": "B"}],
+        "radarr": [],
+        "lidarr": [],
+        "readarr": [],
+    }
+
+    async def fake_search_call(service: str, term: str, limit: int = 10) -> list:
+        return fake_results[service]
+
+    with patch.object(arr, "arr_search_series", new=AsyncMock(side_effect=fake_search_call)):
+        result = await arr.arr_search_all("x", limit=5)
+    assert result["term"] == "x"
+    assert result["totals"]["sonarr"] == 1
+    assert result["totals"]["radarr"] == 0
+
+
+async def test_arr_search_all_rejects_empty_term() -> None:
+    result = await arr.arr_search_all("   ")
+    assert "error" in result
+    assert "term" in result["error"]
+
+
+async def test_arr_status_all_healthy_count_excludes_errors() -> None:
+    """A service returning an error dict should NOT count as healthy."""
+
+    async def fake_status_call(service: str) -> dict:
+        if service == "lidarr":
+            return {"service": "lidarr", "error": "401 unauthorized"}
+        return {"service": service, "version": "1.0"}
+
+    with patch.object(arr, "arr_status", new=AsyncMock(side_effect=fake_status_call)):
+        result = await arr.arr_status_all()
+    assert result["healthy_count"] == 3
+    assert "error" in result["services"]["lidarr"]
+
+
+# ---------------------- lookup-path routing -----------------------------
+
+
+def test_lookup_paths_cover_all_services() -> None:
+    """Every service in _VALID_SERVICES must have a lookup path."""
+    for svc in arr._VALID_SERVICES:
+        assert svc in arr._LOOKUP_PATHS
+        assert arr._LOOKUP_PATHS[svc].endswith("/lookup")
+
+
+def test_shape_lookup_per_service() -> None:
+    """The per-service field shaper should only surface the documented fields."""
+    sonarr = arr._shape_lookup("sonarr", {"title": "T", "year": 2020, "tvdbId": 1, "imdbId": "tt1", "overview": "x"})
+    assert set(sonarr.keys()) == {"title", "year", "tvdbId", "imdbId", "overview"}
+
+    radarr = arr._shape_lookup("radarr", {"title": "T", "year": 2020, "tmdbId": 1, "imdbId": "tt1", "runtime": 120, "overview": "x"})
+    assert set(radarr.keys()) == {"title", "year", "tmdbId", "imdbId", "runtime", "overview"}
+
+    lidarr = arr._shape_lookup("lidarr", {"artistName": "Radiohead", "foreignArtistId": "abc", "overview": "x"})
+    assert set(lidarr.keys()) == {"title", "foreignArtistId", "overview"}
+    assert lidarr["title"] == "Radiohead"
+
+    readarr = arr._shape_lookup("readarr", {"title": "Book", "authorTitle": "A — Book", "foreignBookId": "b1", "releaseDate": "2020-01-01"})
+    assert set(readarr.keys()) == {"title", "authorTitle", "foreignBookId", "releaseDate"}

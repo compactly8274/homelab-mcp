@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from homelab_mcp.tools.plex import (
     plex_active_sessions,
+    plex_get_metadata,
     plex_library_sections,
     plex_recently_added,
     plex_search,
@@ -226,3 +227,155 @@ def test_plex_status_handles_invalid_xml() -> None:
         import asyncio
         r = asyncio.run(plex_status())
     assert "error" in r
+
+
+# ----------------------------- get_metadata -----------------------------
+
+
+_METADATA_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="1">
+  <Video ratingKey="42" key="/library/metadata/42" title="Some Movie" type="movie" year="2017"
+         summary="A long summary that goes on and on and on and on and on and on and on and on and on and on and on and on." genre="Action|Drama|Sci-Fi"
+         duration="7200000" viewCount="2" rating="8.5" studio="Warner Bros" addedAt="1700000000" updatedAt="1710000000">
+    <Genre tag="Action"/>
+    <Genre tag="Drama"/>
+    <Genre tag="Sci-Fi"/>
+    <Media id="1" container="mkv" videoCodec="hevc" audioCodec="truehd" bitrate="25000" width="3840" height="2160" duration="7200000">
+      <Part id="10" container="mkv" file="/movies/some.mkv" size="80000000000"/>
+    </Media>
+  </Video>
+</MediaContainer>"""
+
+
+def test_plex_get_metadata_extracts_fields_and_genres() -> None:
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, url, headers=None, params=None):
+            return _mock_response(text=_METADATA_XML)
+
+    with patch("homelab_mcp.tools.plex.httpx.AsyncClient", _C):
+        import asyncio
+        r = asyncio.run(plex_get_metadata(42))
+    assert r["ratingKey"] == "42"
+    assert r["title"] == "Some Movie"
+    assert r["type"] == "video"
+    assert r["year"] == "2017"
+    assert r["duration"] == "7200000"
+    assert r["viewCount"] == "2"
+    assert r["rating"] == "8.5"
+    assert r["studio"] == "Warner Bros"
+    assert r["genres"] == ["Action", "Drama", "Sci-Fi"]
+    assert r["Media"][0]["container"] == "mkv"
+    assert r["Media"][0]["videoCodec"] == "hevc"
+    assert r["Media"][0]["Part"][0]["file"] == "/movies/some.mkv"
+
+
+def test_plex_get_metadata_accepts_string_rating_key() -> None:
+    """rating_key may come in as a string from a previous tool's response."""
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, url, headers=None, params=None):
+            return _mock_response(text=_METADATA_XML)
+
+    with patch("homelab_mcp.tools.plex.httpx.AsyncClient", _C):
+        import asyncio
+        r = asyncio.run(plex_get_metadata("42"))
+    assert r["ratingKey"] == "42"
+    assert r["title"] == "Some Movie"
+
+
+def test_plex_get_metadata_rejects_non_numeric() -> None:
+    import asyncio
+    r = asyncio.run(plex_get_metadata("not-a-number"))
+    assert "error" in r
+    assert "int or numeric string" in r["error"]
+
+
+def test_plex_get_metadata_rejects_zero_or_negative() -> None:
+    import asyncio
+    r = asyncio.run(plex_get_metadata(0))
+    assert "error" in r
+    assert "positive" in r["error"]
+
+
+def test_plex_get_metadata_truncates_long_summary() -> None:
+    long_summary = "x" * 1500
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<MediaContainer size="1">'
+        f'<Video ratingKey="1" title="t" summary="{long_summary}"/>'
+        '</MediaContainer>'
+    )
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, url, headers=None, params=None):
+            return _mock_response(text=xml)
+
+    with patch("homelab_mcp.tools.plex.httpx.AsyncClient", _C):
+        import asyncio
+        r = asyncio.run(plex_get_metadata(1))
+    assert r["summary"].endswith("...")
+    assert len(r["summary"]) <= 1000
+
+
+def test_plex_get_metadata_handles_empty_container() -> None:
+    """No Directory/Video/Track children → error."""
+    xml = '<?xml version="1.0" encoding="UTF-8"?><MediaContainer size="0"/>'
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, url, headers=None, params=None):
+            return _mock_response(text=xml)
+
+    with patch("homelab_mcp.tools.plex.httpx.AsyncClient", _C):
+        import asyncio
+        r = asyncio.run(plex_get_metadata(999))
+    assert "error" in r
+    assert "no metadata found" in r["error"]
+
+
+def test_plex_get_metadata_falls_back_to_pipe_separated_genre() -> None:
+    """If no <Genre/> children but the `genre` attribute is set, split on |."""
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<MediaContainer size="1">'
+        '<Video ratingKey="1" title="t" genre="Action|Drama"/>'
+        '</MediaContainer>'
+    )
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, url, headers=None, params=None):
+            return _mock_response(text=xml)
+
+    with patch("homelab_mcp.tools.plex.httpx.AsyncClient", _C):
+        import asyncio
+        r = asyncio.run(plex_get_metadata(1))
+    assert r["genres"] == ["Action", "Drama"]

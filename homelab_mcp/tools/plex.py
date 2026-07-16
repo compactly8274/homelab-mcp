@@ -300,3 +300,81 @@ async def plex_server_stats() -> dict[str, Any]:
         "library_counts": library_counts,
         "active_sessions": active,
     }
+
+
+@mcp.tool()
+async def plex_get_metadata(rating_key: int | str) -> dict[str, Any]:
+    """Fetch full metadata for a single item (movie/show/episode/track) by ratingKey.
+
+    Companion to ``plex_search`` and ``plex_recently_added`` — those return
+    a shallow row with only basic attributes; this tool returns the full
+    detail (summary, genres, runtime, view count, rating, Media info,
+    available parts, etc.) for one item.
+
+    Args:
+        rating_key: the ``ratingKey`` of the item (an int as a string or
+            number; whatever the search results returned).
+
+    Returns:
+        dict with ``ratingKey``, ``title``, ``type``, ``year``,
+        ``summary`` (truncated to 1000 chars), ``genres`` (list),
+        ``duration`` (Plex's raw millisecond value as a string),
+        ``viewCount``, ``rating``, ``studio``,
+        ``addedAt``, ``updatedAt``, ``Media`` (list of {container,
+        videoCodec, audioCodec, bitrate, etc.}), and ``instance``.
+        On error, returns ``{"error": ...}``.
+    """
+    try:
+        rating_key_int = int(rating_key)
+    except (TypeError, ValueError):
+        return {"error": f"rating_key must be an int or numeric string, got {rating_key!r}"}
+    if rating_key_int <= 0:
+        return {"error": f"rating_key must be positive, got {rating_key_int}"}
+    url = f"{_base_url()}/library/metadata/{rating_key_int}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(url, headers=_headers())
+            r.raise_for_status()
+    except httpx.HTTPError as e:
+        return {"error": f"plex metadata request failed: {e}", "url": url, "rating_key": rating_key_int}
+    try:
+        root = ET.fromstring(r.text)
+    except ET.ParseError as e:
+        return {"error": f"plex returned non-XML: {e}", "rating_key": rating_key_int}
+    # The container is <MediaContainer><Directory|Video|Track/></MediaContainer>
+    item = None
+    for child in root:
+        if child.tag in ("Directory", "Video", "Track", "Photo"):
+            item = child
+            break
+    if item is None:
+        return {"error": f"no metadata found for ratingKey {rating_key_int}", "rating_key": rating_key_int}
+    out: dict[str, Any] = {k: v for k, v in item.attrib.items()}
+    out["type"] = item.tag.lower()
+    # Truncate long summaries (some Plex summaries are 5-10 KB)
+    if "summary" in out and len(out["summary"]) > 1000:
+        out["summary"] = out["summary"][:997] + "..."
+    # Genre is split on "|" or stored in a list of <Genre/> children
+    genre_list: list[str] = []
+    for g in item.findall("Genre"):
+        tag = g.attrib.get("tag", "")
+        if tag:
+            genre_list.append(tag)
+    if genre_list:
+        out["genres"] = genre_list
+    elif out.get("genre"):
+        out["genres"] = [g.strip() for g in out["genre"].split("|") if g.strip()]
+    # Flatten Media[] containers (file/bitrate/codec info)
+    media_list: list[dict[str, Any]] = []
+    for media in item.findall("Media"):
+        m: dict[str, Any] = {k: v for k, v in media.attrib.items()}
+        parts: list[dict[str, Any]] = []
+        for part in media.findall("Part"):
+            parts.append({k: v for k, v in part.attrib.items()})
+        if parts:
+            m["Part"] = parts
+        media_list.append(m)
+    if media_list:
+        out["Media"] = media_list
+    out["instance"] = _base_url()
+    return out
