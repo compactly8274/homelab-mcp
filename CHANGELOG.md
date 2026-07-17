@@ -6,6 +6,42 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.9.0] — 2026-07-16
+
+### Added
+- **WebUI at `/ui/`**: a small browser-based dashboard that
+  wraps the homelab-mcp tools. Single-page vanilla JS,
+  ~250 lines, no framework. Pages: Dashboard (host health,
+  container counts, top problems), Pending Updates (Apply /
+  Preview / Dismiss per row), History (per-host+stack update
+  log), Containers (start/stop/restart/kill/pause/unpause),
+  Notifier (configured backends, missing env hints). Bind:
+  127.0.0.1 only — expose via Pangolin/NPM if remote access
+  is needed (no auth, LAN-only by design).
+- **JSON API at `/api/*`**: GET /api/dashboard, /api/pendings,
+  /api/history, /api/notifier, /api/preflight, /api/stacks;
+  POST /api/apply, /api/container_action, /api/dismiss.
+  All endpoints are thin wrappers over the same tool
+  functions the LLM calls — no separate code path to drift.
+- **Canary cron at `homelab_mcp.scripts.canary_cron`**:
+  Run as `python -m homelab_mcp.scripts.canary_cron
+  --config <path-to-.env> --json`. Scans truenas, dry-runs
+  the 3 canary stacks (PlexAutoLanguages, dockwatch,
+  homelab-mcp), then applies for real if `would_apply=True`.
+  Sends ONE ntfy summary at the end. Opt-in via
+  `HOMELAB_MCP_CANARY_CRON=1` (refuses to run without it).
+  Scheduled in the hermes cron: `0 */6 * * *` (every 6h).
+
+### Fixed
+- `State.__init__` now normalizes `db_path` to `pathlib.Path`
+  so callers that pass a `str` don't crash on
+  `.parent.mkdir()` during `init_db()`.
+
+### Tests
+- 18 new tests: 12 in `tests/test_webui.py`, 6 in
+  `tests/test_canary_cron.py`.
+- 343 passed, 10 skipped (up from 325 in v0.8.0).
+
 ## [0.8.0] — 2026-07-16
 
 ### Added
