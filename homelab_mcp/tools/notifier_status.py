@@ -54,12 +54,6 @@ def _configured_backends(settings: Settings) -> list[dict[str, Any]]:
         })
     if settings.discord_webhook_url:
         out.append({"backend": "discord", "url_prefix": settings.discord_webhook_url[:60] + "..."})
-    if settings.webhook_url:
-        out.append({
-            "backend": "webhook",
-            "url_prefix": settings.webhook_url[:60] + "...",
-            "has_secret": bool(settings.webhook_secret),
-        })
     return out
 
 
@@ -72,7 +66,6 @@ def _missing_env_hints() -> list[str]:
         ("HOMELAB_MCP_PUSHOVER_APP_TOKEN", "Pushover"),
         ("HOMELAB_MCP_PUSHOVER_USER_KEY", "Pushover"),
         ("HOMELAB_MCP_DISCORD_WEBHOOK_URL", "Discord webhook"),
-        ("HOMELAB_MCP_WEBHOOK_URL", "generic webhook"),
     ]
     return [var for var, _ in candidates if not os.environ.get(var)]
 
