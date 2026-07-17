@@ -70,8 +70,25 @@ RUN groupadd -g 1000 homelab && \
     chown -R homelab:homelab /data
 
 # tini for proper signal handling (PID 1 zombie reaping).
+# docker-ce-cli: so the runtime can shell out to `docker compose`
+# (used by LocalDocker.compose_pull / compose_up) when the host
+# is the local one (e.g. homelab-mcp running on TrueNAS itself).
+# Without this, LocalDocker.compose_pull fails with
+# `FileNotFoundError: 'docker'` when applying updates on the
+# local host. ~30MB; the socket is already mounted so this
+# just gives us the CLI to talk to it.
 RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends tini ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        tini ca-certificates \
+        curl gnupg && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
+        > /etc/apt/sources.list.d/docker.list && \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends docker-ce-cli && \
     rm -rf /var/lib/apt/lists/*
 
 USER homelab
