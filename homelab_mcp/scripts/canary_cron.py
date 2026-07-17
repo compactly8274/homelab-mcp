@@ -91,7 +91,8 @@ async def _run_canary() -> dict[str, Any]:
     from homelab_mcp import server
     from homelab_mcp import state as state_mod
 
-    env_path = Path(os.environ.get("HOMELAB_MCP_ENV_FILE", "/data/.env"))
+    env_path = Path(os.environ.get("HOMELAB_MCP_ENV_FILE",
+                                   "/mnt/Data/appdata/dockge/stacks/homelab-mcp/.env"))
     env = _load_env(env_path)
     settings = _setup_settings(env)
 
@@ -220,8 +221,14 @@ def main() -> int:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("/data/.env"),
-        help="Path to the homelab-mcp .env file (default: /data/.env)",
+        default=Path("/mnt/Data/appdata/dockge/stacks/homelab-mcp/.env"),
+        help=(
+            "Path to the homelab-mcp .env file. The Docker image's "
+            "/data/.env is the state dir, not the env file (the env "
+            "file is mounted into Dockge's stacks dir, not the state "
+            "volume). On a typical TrueNAS deployment this is the "
+            "DOCKGE_STACKS_ROOT/<stack-name>/.env path."
+        ),
     )
     parser.add_argument(
         "--json",
