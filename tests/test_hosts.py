@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 from unittest.mock import patch as _patch
 
 import pytest
@@ -177,3 +178,44 @@ def test_remote_ssh_satisfies_hostclient_protocol() -> None:
     h = RemoteSSH(name="x", ssh_alias="x", ssh_config_path="/dev/null", verify_config=False)
     from homelab_mcp.hosts.base import HostClient
     assert isinstance(h, HostClient)
+
+
+def test_remote_ssh_list_containers_strips_label_prefix() -> None:
+    """`docker ps --format '{{.Label "com.docker.compose.project"}}'` emits
+    `PROJECT=foo` even when the label is missing (so un-managed containers
+    come through as the literal string `PROJECT=`). The list_containers
+    parser must strip the `KEY=` prefix so the resulting PROJECT field is
+    the empty string for un-managed containers, matching the LocalDocker
+    contract. Regression test for v0.7.0."""
+    import asyncio
+
+    from homelab_mcp.hosts.remote_ssh import RemoteSSH
+
+    h = RemoteSSH(name="unraid", ssh_alias="unraid",
+                  ssh_config_path="/dev/null", verify_config=False)
+
+    # Simulated `docker ps` output: one managed container, one not.
+    fake_stdout = (
+        "NAME=plex\tIMAGE=img\tSTATE=running\tSTATUS=Up\tID=abc\t"
+        "PROJECT=plex\tSERVICE=web\tWORKDIR=/srv\tCONFIGFILES=\n"
+        "NAME=loose\tIMAGE=img2\tSTATE=running\tSTATUS=Up\tID=def\t"
+        "PROJECT=\tSERVICE=\tWORKDIR=\tCONFIGFILES=\n"
+    )
+    fake_completed = MagicMock()
+    fake_completed.stdout = fake_stdout
+    fake_completed.stderr = ""
+    fake_completed.returncode = 0
+    fake_completed.exit_code = 0  # legacy alias
+
+    class _FakeConn:
+        is_closed = False
+        async def run(self, cmd, *a, **kw):
+            return fake_completed
+
+    h._conn = _FakeConn()
+    out = asyncio.run(h.list_containers(all=True))
+    assert out[0]["PROJECT"] == "plex"   # managed
+    assert out[0]["SERVICE"] == "web"
+    assert out[1]["PROJECT"] == ""      # un-managed: empty, not "PROJECT="
+    assert out[1]["SERVICE"] == ""
+    assert out[1]["WORKDIR"] == ""

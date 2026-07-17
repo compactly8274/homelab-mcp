@@ -125,16 +125,23 @@ class RemoteSSH:
             parts = line.split("\t")
             if len(parts) < 9:
                 continue
+            # The {{.Label "..."}} template emits the field name followed
+            # by '=' even when the label is absent, so an un-managed
+            # container comes through as e.g. 'PROJECT='. Strip the
+            # 'KEY=' prefixes to leave just the value (empty string
+            # when the label is missing) — keeps the contract with
+            # LocalDocker.list_containers, where missing labels
+            # default to ''.
             out.append({
                 "NAME": parts[0],
                 "IMAGE": parts[1],
                 "STATE": parts[2],
                 "STATUS": parts[3],
                 "ID": parts[4],
-                "PROJECT": parts[5],
-                "SERVICE": parts[6],
-                "WORKDIR": parts[7],
-                "CONFIGFILES": parts[8],
+                "PROJECT": parts[5].removeprefix("PROJECT="),
+                "SERVICE": parts[6].removeprefix("SERVICE="),
+                "WORKDIR": parts[7].removeprefix("WORKDIR="),
+                "CONFIGFILES": parts[8].removeprefix("CONFIGFILES="),
             })
         return out
 

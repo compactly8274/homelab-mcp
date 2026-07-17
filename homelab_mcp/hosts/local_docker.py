@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import shlex
 import subprocess
 import time
@@ -39,6 +40,9 @@ def _safe_json(obj: Any) -> Any:
         return obj
     # datetime, Path, etc.
     return str(obj)
+
+
+log = logging.getLogger(__name__)
 
 
 def _container_to_flat_dict(c: Any) -> dict[str, Any]:
@@ -113,26 +117,43 @@ class LocalDocker:
     async def events(self, since_seconds: int = 300) -> list[dict[str, Any]]:
         """Return docker events from the last N seconds.
 
-        Implementation: subprocess ``docker events --since Ns --format
-        {{json .}}`` with bounded time, parsed via to_thread.
+        Uses the docker SDK ``APIClient.events(since=...)`` instead
+        of shelling out to ``docker events``. The previous
+        subprocess approach required the docker CLI on PATH, which
+        is not present in the homelab-mcp container — the SDK
+        works because the docker socket IS mounted (read-only).
+
+        Output shape: a list of dicts with at least
+        ``{status, id, from, Type, Action, Actor}`` per event,
+        matching what ``docker events --format {{json .}}`` would
+        emit. We decode and return parsed JSON objects.
         """
-        proc = await asyncio.to_thread(
-            functools.partial(
-                subprocess.run,
-                ["docker", "events", "--since", f"{since_seconds}s", "--format", "{{json .}}"],
-                capture_output=True, text=True, timeout=15,
-            )
-        )
+        try:
+            from docker.errors import APIError
+        except ImportError:
+            return []
+        # APIClient is a different class from DockerClient; both
+        # share the same socket.
+        try:
+            client = self._ensure_client()
+            # The high-level client doesn't expose events(); use
+            # the low-level APIClient on the same socket.
+            api = client.api
+        except Exception as e:
+            log.warning("LocalDocker.events: cannot get client: %s", e)
+            return []
         out: list[dict[str, Any]] = []
-        for line in proc.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                import json
-                out.append(json.loads(line))
-            except Exception:
-                continue
+        try:
+            gen = api.events(since=since_seconds, decode=True)
+            for ev in gen:
+                if isinstance(ev, dict):
+                    out.append(ev)
+                if len(out) >= 50:  # cap so a noisy host doesn't flood
+                    break
+        except APIError as e:
+            log.warning("LocalDocker.events: APIClient.events failed: %s", e)
+        except Exception as e:
+            log.warning("LocalDocker.events: unexpected error: %s", e)
         return out
 
     async def list_stacks(self) -> list[dict[str, Any]]:

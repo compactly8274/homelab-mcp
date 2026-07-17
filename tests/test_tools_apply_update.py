@@ -149,7 +149,7 @@ async def test_apply_breaking_classification_notifies_not_applies() -> None:
          patch("homelab_mcp.tools.apply_update._build_notifier_from_settings",
                return_value=fake_notifier), \
          patch("homelab_mcp.tools.apply_update.Settings", return_value=_settings()):
-        result = await apply_update_tool(host="truenas", stack="immich")
+        result = await apply_update_tool(host="truenas", stack="immich", require_approval=False)
     assert result["action"] == "notified_breaking"
     assert result["verdict"]["risk"] == "BREAKING"
     assert result["image"] == "ghcr.io/immich-app/immich-server:release"
@@ -188,7 +188,7 @@ async def test_apply_safe_classification_runs_pipeline() -> None:
          patch("homelab_mcp.tools.apply_update._build_notifier_from_settings",
                return_value=MagicMock(notify=AsyncMock())), \
          patch("homelab_mcp.tools.apply_update.Settings", return_value=_settings()):
-        result = await apply_update_tool(host="truenas", stack="immich")
+        result = await apply_update_tool(host="truenas", stack="immich", require_approval=False)
     assert result["action"] == "applied"
     assert result["verdict"]["risk"] == "SAFE"
     assert result["forced"] is False
@@ -231,7 +231,7 @@ async def test_apply_force_bypasses_policy_but_still_healthchecks() -> None:
                return_value=MagicMock(notify=AsyncMock())), \
          patch("homelab_mcp.tools.apply_update.Settings",
                return_value=_settings(auto_apply_policy="safe-only")):
-        result = await apply_update_tool(host="truenas", stack="immich", force=True)
+        result = await apply_update_tool(host="truenas", stack="immich", force=True, require_approval=False)
     assert result["action"] == "applied"
     assert result["forced"] is True
     assert result["policy"] == "safe-and-caution"  # overridden by force
@@ -263,7 +263,7 @@ async def test_apply_catches_orchestrator_exceptions() -> None:
          patch("homelab_mcp.tools.apply_update._build_notifier_from_settings",
                return_value=MagicMock(notify=AsyncMock())), \
          patch("homelab_mcp.tools.apply_update.Settings", return_value=_settings()):
-        result = await apply_update_tool(host="truenas", stack="immich")
+        result = await apply_update_tool(host="truenas", stack="immich", require_approval=False)
     assert result["action"] == "failed"
     assert "orchestrator crashed" in result["error"]
 

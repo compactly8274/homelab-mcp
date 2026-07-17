@@ -75,6 +75,7 @@ async def apply_update_tool(
     stack: str,
     force: bool = False,
     dry_run: bool = False,
+    require_approval: bool = True,
 ) -> dict[str, Any]:
     """Apply the latest pending update for a (host, stack).
 
@@ -110,6 +111,15 @@ async def apply_update_tool(
         snapshotting, pulling, or restarting anything. Safe to call
         on any stack. Combine with ``force=False`` to preview what
         the policy would do.
+    require_approval : bool, default True
+        If True (the default), call ``preflight_check_tool`` first
+        and refuse to apply if there are any blockers. Returns
+        ``{action: "blocked", preflight: {...}}`` with the full
+        verdict so the caller (or user) can decide whether to
+        re-call with ``require_approval=False``. The preflight
+        gate is **skipped automatically when ``dry_run=True``**
+        (a read-only preview is always safe) and when the
+        autonomous cron calls this internally.
 
     Returns
     -------
@@ -184,6 +194,33 @@ async def apply_update_tool(
     #    "safe-and-caution" so the BREAKING branch is skipped. The
     #    pipeline itself still healthchecks + rolls back on failure.
     effective_policy = "safe-and-caution" if force else settings.auto_apply_policy
+
+    # 4a. Pre-flight gate: when the MCP-tool path is invoked directly
+    #     (not the autonomous cron), check the verdict before pulling.
+    #     dry_run=True is a read-only preview and never blocks.
+    if require_approval and not dry_run:
+        from homelab_mcp.tools.preflight import preflight_check_tool
+        verdict = await preflight_check_tool(
+            host=host, stack=stack, action="apply_update"
+        )
+        if not verdict["safe"]:
+            return {
+                "action": "blocked",
+                "host": host,
+                "stack": stack,
+                "image": image,
+                "current_digest": current_digest,
+                "to_digest": to_digest,
+                "policy": effective_policy,
+                "forced": force,
+                "dry_run": dry_run,
+                "preflight": verdict,
+                "message": (
+                    f"preflight refused: {len(verdict['blockers'])} blocker(s). "
+                    f"Re-call with require_approval=False to override "
+                    f"(not recommended for production)."
+                ),
+            }
 
     try:
         result = await evaluate_and_act(
