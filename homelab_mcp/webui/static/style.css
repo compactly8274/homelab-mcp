@@ -1,0 +1,48 @@
+/* homelab-mcp webui — minimal, no framework. */
+* { box-sizing: border-box; }
+body { font: 14px -apple-system, system-ui, sans-serif; margin: 0; color: #1a1a1a; background: #fafafa; }
+header { padding: 12px 24px; background: #1a1a1a; color: #fafafa; display: flex; align-items: center; gap: 16px; }
+header h1 { font-size: 18px; margin: 0; }
+header nav { margin-left: auto; }
+header nav button {
+  background: transparent; color: #fafafa; border: 1px solid #555;
+  padding: 6px 12px; margin-left: 4px; cursor: pointer; border-radius: 3px;
+}
+header nav button.active { background: #fafafa; color: #1a1a1a; }
+#version { font-size: 12px; opacity: 0.6; }
+main { padding: 24px; max-width: 1200px; }
+.view.hidden { display: none; }
+h2 { margin-top: 0; }
+.muted { color: #666; font-size: 12px; }
+.row { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.row label { display: flex; align-items: center; gap: 6px; }
+.row label.cb { font-size: 13px; }
+input, select, button { padding: 6px 10px; font-size: 14px; }
+button { background: #0066cc; color: white; border: 0; border-radius: 3px; cursor: pointer; }
+button:hover { background: #0052a3; }
+button.secondary { background: #666; }
+button.danger { background: #c0392b; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 12px 0; }
+.card { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 12px; }
+.card .num { font-size: 24px; font-weight: bold; }
+.card .label { font-size: 12px; color: #666; text-transform: uppercase; }
+.card.unhealthy .num { color: #c0392b; }
+.card.warn .num { color: #d2691e; }
+table { border-collapse: collapse; width: 100%; background: white; margin: 12px 0; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }
+th { background: #f0f0f0; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+tr:hover { background: #f8f8f8; }
+.badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.badge.ok { background: #27ae60; color: white; }
+.badge.warn { background: #d2691e; color: white; }
+.badge.danger { background: #c0392b; color: white; }
+.badge.muted { background: #ddd; color: #666; }
+.result { background: #1a1a1a; color: #fafafa; padding: 12px; border-radius: 4px; overflow: auto; max-height: 400px; }
+.host-block { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 12px; margin: 8px 0; }
+.host-block h4 { margin: 0 0 8px 0; }
+.problem { background: #fff8e1; border-left: 3px solid #d2691e; padding: 6px 10px; margin: 4px 0; font-size: 13px; }
+.problem.blocker { background: #fde8e6; border-left-color: #c0392b; }
+.actions { display: flex; gap: 4px; }
+.actions button { font-size: 12px; padding: 4px 8px; }
+.empty { color: #666; font-style: italic; padding: 12px; }
+.error { color: #c0392b; }

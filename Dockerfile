@@ -58,6 +58,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # The runtime stage carries only the venv + the package + the entrypoint.
 COPY --from=builder /install /install
 COPY homelab_mcp /install/lib/python3.12/site-packages/homelab_mcp
+# webui/ must be copied explicitly: it's a sibling of __init__.py,
+# not a Python module, so the previous line copies it as part of
+# the package dir, but we re-state it here in case a future
+# `.dockerignore` excludes non-`.py` files. (Defensive only; the
+# line above already covers it.)
+COPY homelab_mcp/webui /install/lib/python3.12/site-packages/homelab_mcp/webui
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Non-root user. uid 1000 matches the typical first non-system user

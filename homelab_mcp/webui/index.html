@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>homelab-mcp</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+</head>
+<body>
+<header>
+  <h1>homelab-mcp</h1>
+  <span id="version" class="muted"></span>
+  <nav>
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="pendings">Pending Updates</button>
+    <button data-view="history">History</button>
+    <button data-view="containers">Containers</button>
+    <button data-view="notifier">Notifier</button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-dashboard" class="view">
+    <h2>Dashboard</h2>
+    <div id="dashboard-summary" class="cards"></div>
+    <h3>Hosts</h3>
+    <div id="dashboard-hosts"></div>
+  </section>
+
+  <section id="view-pendings" class="view hidden">
+    <h2>Pending Updates</h2>
+    <div class="row">
+      <label>Host: <select id="pendings-host"></select></label>
+      <button id="pendings-refresh">Refresh</button>
+    </div>
+    <div id="pendings-list"></div>
+  </section>
+
+  <section id="view-history" class="view hidden">
+    <h2>Update History</h2>
+    <div class="row">
+      <label>Host: <select id="history-host"></select></label>
+      <label>Stack: <input id="history-stack" placeholder="e.g. plex"></label>
+      <button id="history-refresh">Refresh</button>
+    </div>
+    <div id="history-list"></div>
+  </section>
+
+  <section id="view-containers" class="view hidden">
+    <h2>Container Actions</h2>
+    <p class="muted">
+      Stop / start / restart a container or an entire stack.
+      All actions go through the preflight gate (require_approval=True default).
+    </p>
+    <form id="container-action-form">
+      <div class="row">
+        <label>Host:
+          <select id="ca-host"></select>
+        </label>
+        <label>Target:
+          <input id="ca-target" placeholder="container name or stack">
+        </label>
+        <label>Action:
+          <select id="ca-action">
+            <option value="restart">restart</option>
+            <option value="stop">stop</option>
+            <option value="start">start</option>
+            <option value="kill">kill</option>
+            <option value="pause">pause</option>
+            <option value="unpause">unpause</option>
+          </select>
+        </label>
+        <label class="cb">
+          <input type="checkbox" id="ca-approval" checked>
+          require preflight approval
+        </label>
+        <button type="submit">Run</button>
+      </div>
+    </form>
+    <pre id="ca-result" class="result"></pre>
+  </section>
+
+  <section id="view-notifier" class="view hidden">
+    <h2>Notifier</h2>
+    <p class="muted">
+      Which notifier backends are wired up via env vars. ntfy / pushover / discord.
+    </p>
+    <div id="notifier-list"></div>
+  </section>
+</main>
+
+<script src="/ui/static/app.js"></script>
+</body>
+</html>

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 import aiosqlite
 
@@ -93,7 +94,10 @@ class State:
     """Async SQLite wrapper for the homelab-mcp server."""
 
     def __init__(self, db_path, busy_timeout_ms: int = 5000) -> None:
-        self._db_path = db_path
+        # Normalize to pathlib.Path so callers can pass either
+        # str or Path. init_db() does self._db_path.parent.mkdir(...)
+        # which would fail on a plain str.
+        self._db_path = Path(db_path)
         self._busy_timeout_ms = busy_timeout_ms
 
     async def _connect(self):

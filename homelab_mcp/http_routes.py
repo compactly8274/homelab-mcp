@@ -21,6 +21,10 @@ from starlette.responses import JSONResponse, Response
 if TYPE_CHECKING:
     pass
 
+# webui.WebUIMiddleware is imported lazily inside build_sse_app
+# to avoid a circular import (webui imports tools which import
+# server which sets up mcp which lists all tools).
+
 log = logging.getLogger(__name__)
 
 
@@ -123,6 +127,14 @@ def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
         ],
     )
     starlette_app.add_middleware(HealthAndStatusMiddleware, get_state=get_state)
+    # WebUI is layered AFTER HealthAndStatus so /health + /status
+    # are still intercepted by the inner middleware. Starlette
+    # runs middleware in reverse-add order, so the LAST added is
+    # the OUTERMOST — meaning the WebUI sees the request first,
+    # and only delegates to HealthAndStatusMiddleware / SSE when
+    # the path doesn't match a WebUI route.
+    from homelab_mcp.webui import WebUIMiddleware
+    starlette_app.add_middleware(WebUIMiddleware, get_state=get_state)
     return starlette_app
 
 
