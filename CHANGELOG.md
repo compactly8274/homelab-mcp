@@ -6,6 +6,45 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.8.0] — 2026-07-16
+
+### Added
+- **`container_action_tool(host, target, action, require_approval=True)`**:
+  start / stop / restart / kill / pause / unpause a container
+  or an entire stack from the LLM surface. Goes through the
+  preflight gate (same as `apply_update_tool`): unknown hosts,
+  unknown targets, and multi-container stacks on destructive
+  actions are blocked by default. `target` accepts either a
+  container NAME or a compose project name (= stack); container
+  names take precedence. Closes the preflight-gap noted in the
+  v0.7.0 writeup.
+- **`notifier_status_tool(test_notify=False)`**: surfaces the
+  notifier configuration — which backends (ntfy / pushover /
+  discord) are wired up via env vars, which are missing.
+  With `test_notify=True` it sends a self-test message to every
+  configured backend so the wire can be verified after a
+  container restart. Closes the "notifier is a silent no-op"
+  failure mode (every backend's `notify()` returned `None`
+  silently if the env vars were missing).
+
+### Fixed
+- **Local-host apply bug**: the homelab-mcp image had no
+  `docker` CLI on PATH, so `LocalDocker.compose_pull` /
+  `compose_up` (used by the apply pipeline on the local host)
+  failed with `FileNotFoundError`. The docker socket was always
+  mounted; we just didn't have the CLI to talk to it. Fixed by
+  installing `docker-ce-cli` and `docker-compose-plugin` in the
+  runtime image (single apt-get, ~30MB). The local-host apply
+  path now works end-to-end: live-verified by `apply_update_tool`
+  with `dry_run=True` on truenas/PlexAutoLanguages, which
+  successfully fetched release notes, classified as CAUTION, and
+  returned `would_apply=True`.
+
+### Tests
+- 10 new tests in `tests/test_v080.py` (5 container_action,
+  5 notifier_status).
+- 325 passed, 10 skipped (up from 315 in v0.7.0).
+
 ## [0.7.0] — 2026-07-16
 
 ### Added
