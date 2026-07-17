@@ -6,6 +6,41 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.7.0] — 2026-07-16
+
+### Added
+- **`apply_update_tool` now has a `require_approval=True` gate.**
+  When True (the default), the tool calls `preflight_check_tool`
+  first and refuses to apply if there are any blockers. Returns
+  `{action: "blocked", preflight: {full verdict}}` so the
+  caller can decide whether to override with `require_approval=False`.
+  `dry_run=True` always bypasses the gate (a read-only preview
+  is safe). `apply_all_pending_tool` inherits the gate
+  automatically. The autonomous cron path is unchanged — it
+  calls `evaluate_and_act` directly, not through the MCP tool.
+
+### Fixed
+- **Dashboard `recent_events` was empty** for the local host.
+  Root cause: `LocalDocker.events()` was shelling out to
+  `docker events`, which fails inside the homelab-mcp container
+  because the docker CLI is not on PATH (only the docker socket
+  is mounted). Switched to `docker.APIClient.events(since=N)`
+  which works through the socket. Now returns real events.
+- **RemoteSSH `list_containers` emitted `PROJECT=foo`** when
+  the `com.docker.compose.project` label was missing, due to
+  the `{{.Label "..."}}` template in `docker ps --format`.
+  Stripped the `KEY=` prefix on parse so un-managed containers
+  come through as `''` (matching the LocalDocker contract).
+  v0.5.0's dashboard was double-counting these as stacks named
+  "PROJECT=bookshelf" etc. Now they're correctly classified
+  as single, un-managed containers. Total stack count went
+  from 66 (with noise) to 155 (clean) on this homelab.
+
+### Tests
+- 5 new tests (4 preflight-gate integration,
+  1 RemoteSSH PROJECT-prefix stripping).
+- 315 passed, 10 skipped (up from 310 in v0.6.0).
+
 ## [0.6.0] — 2026-07-16
 
 ### Added
