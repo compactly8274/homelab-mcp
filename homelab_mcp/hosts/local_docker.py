@@ -127,6 +127,16 @@ class LocalDocker:
         ``{status, id, from, Type, Action, Actor}`` per event,
         matching what ``docker events --format {{json .}}`` would
         emit. We decode and return parsed JSON objects.
+
+        Fix 2026-07-18: previously called ``api.events(since=...)``
+        without an ``until=`` filter. The docker SDK ``events()``
+        is a **streaming generator** — without ``until=`` it stays
+        open and yields events as they happen, blocking the caller
+        for the full stream timeout (default 10 min) on a quiet
+        host. With both ``since=`` and ``until=`` the daemon
+        closes the stream after replaying the historical window,
+        and the generator returns promptly. Dashboard requests
+        that previously took 15s now return in <1s.
         """
         try:
             from docker.errors import APIError
@@ -143,8 +153,17 @@ class LocalDocker:
             log.warning("LocalDocker.events: cannot get client: %s", e)
             return []
         out: list[dict[str, Any]] = []
+        # Pin the start time so the window is stable for the
+        # duration of the stream (avoids growing the window
+        # mid-iteration if the call is slow).
+        import time as _time
+        now = int(_time.time())
         try:
-            gen = api.events(since=since_seconds, decode=True)
+            gen = api.events(
+                since=now - int(since_seconds),
+                until=now,
+                decode=True,
+            )
             for ev in gen:
                 if isinstance(ev, dict):
                     out.append(ev)

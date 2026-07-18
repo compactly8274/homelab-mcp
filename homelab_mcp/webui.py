@@ -116,6 +116,7 @@ class WebUIMiddleware(BaseHTTPMiddleware):
     # ----- api -----
 
     async def _handle_api(self, request: Request, path: str, method: str) -> Response:
+        log.info("webui api: %s %s", method, path)
         # We dispatch by path. All endpoints are thin wrappers over
         # the same tool functions the LLM calls. The tool returns
         # a dict; we just JSON-encode it. Errors return 500 with
@@ -130,6 +131,7 @@ class WebUIMiddleware(BaseHTTPMiddleware):
                     status_code=405,
                 )
             result = await handler["fn"](request)
+            log.info("webui api %s %s -> %d bytes", method, path, len(json.dumps(result, default=str)))
             return JSONResponse(result)
         except Exception as e:
             log.exception("webui api handler %s %s failed", method, path)
@@ -217,7 +219,10 @@ async def _api_container_action(request: Request) -> dict[str, Any]:
 
 
 async def _api_dismiss(request: Request) -> dict[str, Any]:
-    from homelab_mcp.tools.dismiss_all_pending import pending_update_dismiss_tool
+    # pending_update_dismiss_tool lives in tools/updates.py, not tools/dismiss_all_pending.py
+    # (dismiss_all_pending.py exports the bulk dismiss_all_pending_tool only).
+    # Fix 2026-07-18: was importing from the wrong module → 500 on /api/dismiss.
+    from homelab_mcp.tools.updates import pending_update_dismiss_tool
     body = await _read_json_body(request)
     required = ("host", "stack", "latest_digest")
     missing = [k for k in required if not body.get(k)]
