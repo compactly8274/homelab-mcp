@@ -105,15 +105,21 @@ class RemoteSSH:
         comma-joined-string problem. We pull the four labels that matter
         for stack detection plus the four basic identity fields.
 
-        Fix 2026-07-18: the previous template used double quotes inside
-        the {{.Label "key"}} Go template syntax. When the whole format
-        string is wrapped in single quotes for the shell, the inner
-        double quotes still get expanded by the remote shell as variable
-        lookups. Unraid's docker runtime sets per-container env vars
-        (NAME, IMAGE, etc.), so those names get substituted into the
-        format string, corrupting the output: e.g. unraid showed
-        stack names like "NAME=AdGuard-Home". Using single quotes
-        around the label key prevents shell expansion.
+        Quoting history (Fix 2026-07-18):
+        - v0.9.0: double-quoted Go template keys inside a single-quoted
+          shell string. On unraid the inner double-quotes got expanded
+          by the shell as env-var lookups (unraid auto-sets NAME, IMAGE,
+          etc. on every container), corrupting the format string.
+        - v0.9.3: switched to single-quoted Go template keys. Worked on
+          modern docker, but unraid's older Go template engine doesn't
+          accept single-quoted string literals, so every docker ps call
+          on unraid errored out and returned 0 containers.
+        - v0.9.4 (this version): write the format string to a temp file
+          on the remote host, then use ``docker ps --format "$(cat
+          /tmp/fmt-XXX)"``. This avoids BOTH shell expansion and the
+          bash quote-nesting problem; the format is read directly by
+          the docker CLI without going through any shell interpreter.
+        The format file is removed in a finally block.
         """
         tmpl = (
             "NAME={{.Names}}"
@@ -121,12 +127,25 @@ class RemoteSSH:
             "\tSTATE={{.State}}"
             "\tSTATUS={{.Status}}"
             "\tID={{.ID}}"
-            "\tPROJECT={{.Label 'com.docker.compose.project'}}"
-            "\tSERVICE={{.Label 'com.docker.compose.service'}}"
-            "\tWORKDIR={{.Label 'com.docker.compose.project.working_dir'}}"
-            "\tCONFIGFILES={{.Label 'com.docker.compose.project.config_files'}}"
+            "\tPROJECT={{.Label \"com.docker.compose.project\"}}"
+            "\tSERVICE={{.Label \"com.docker.compose.service\"}}"
+            "\tWORKDIR={{.Label \"com.docker.compose.project.working_dir\"}}"
+            "\tCONFIGFILES={{.Label \"com.docker.compose.project.config_files\"}}"
         )
-        cmd = f"docker ps --format '{tmpl}' {'--all' if all else ''}"
+        # Use a heredoc to land the format string verbatim on the remote,
+        # then read it back with $(cat ...). The whole tmpl never goes
+        # through bash's quote parser, so the {{.Label "key"}} double
+        # quotes survive intact. mktemp picks a unique name so
+        # concurrent calls don't collide.
+        all_flag = "--all" if all else ""
+        cmd = (
+            "TMPL=$(mktemp); "
+            "cat > \"$TMPL\" <<'__HOMELAB_MCP_FMT__'\n"
+            f"{tmpl}\n"
+            "__HOMELAB_MCP_FMT__\n"
+            f"docker ps {all_flag} --format \"$(cat $TMPL)\"; "
+            "RC=$?; rm -f \"$TMPL\"; exit $RC"
+        )
         r = await self._run(cmd, timeout=30.0)
         if not r.ok:
             return []
