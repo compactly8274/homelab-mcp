@@ -62,7 +62,24 @@ async def _host_snapshot(name: str, host: Any) -> dict[str, Any]:
             else:
                 states["other"] += 1
 
-        # Stack counts
+        # Stack counts. Also look up pending_updates per stack so the
+        # WebUI can show "X stacks with pending updates" without
+        # having to make a second /api/pendings call. Fix 2026-07-18:
+        # the WebUI was reading h.stacks.with_pending_updates which
+        # wasn't returned here, so the count always showed 0.
+        stack_names = sorted(s.get("name", "?") for s in stacks)
+        pending_count = 0
+        try:
+            from homelab_mcp import server as _server
+            state = _server.get_state()
+            rows = await state.list_pending_updates(host=name)
+            stack_set = set(stack_names)
+            pending_count = sum(1 for r in rows if r.get("stack") in stack_set)
+        except Exception:
+            # State DB not available or host unknown; leave as 0
+            pending_count = 0
+
+        # Container counts
         snap["containers"] = {
             "total": len(containers),
             "running": states["running"],
@@ -72,7 +89,8 @@ async def _host_snapshot(name: str, host: Any) -> dict[str, Any]:
         }
         snap["stacks"] = {
             "total": len(stacks),
-            "names": sorted(s.get("name", "?") for s in stacks),
+            "names": stack_names,
+            "with_pending_updates": pending_count,
         }
         snap["recent_events"] = events[:3] if isinstance(events, list) else []
         snap["unhealthy_containers"] = unhealthy_names[:10]

@@ -104,6 +104,16 @@ class RemoteSSH:
         Uses ``{{.Label "key"}}`` to fetch specific labels without the
         comma-joined-string problem. We pull the four labels that matter
         for stack detection plus the four basic identity fields.
+
+        Fix 2026-07-18: the previous template used double quotes inside
+        the {{.Label "key"}} Go template syntax. When the whole format
+        string is wrapped in single quotes for the shell, the inner
+        double quotes still get expanded by the remote shell as variable
+        lookups. Unraid's docker runtime sets per-container env vars
+        (NAME, IMAGE, etc.), so those names get substituted into the
+        format string, corrupting the output: e.g. unraid showed
+        stack names like "NAME=AdGuard-Home". Using single quotes
+        around the label key prevents shell expansion.
         """
         tmpl = (
             "NAME={{.Names}}"
@@ -111,10 +121,10 @@ class RemoteSSH:
             "\tSTATE={{.State}}"
             "\tSTATUS={{.Status}}"
             "\tID={{.ID}}"
-            "\tPROJECT={{.Label \"com.docker.compose.project\"}}"
-            "\tSERVICE={{.Label \"com.docker.compose.service\"}}"
-            "\tWORKDIR={{.Label \"com.docker.compose.project.working_dir\"}}"
-            "\tCONFIGFILES={{.Label \"com.docker.compose.project.config_files\"}}"
+            "\tPROJECT={{.Label 'com.docker.compose.project'}}"
+            "\tSERVICE={{.Label 'com.docker.compose.service'}}"
+            "\tWORKDIR={{.Label 'com.docker.compose.project.working_dir'}}"
+            "\tCONFIGFILES={{.Label 'com.docker.compose.project.config_files'}}"
         )
         cmd = f"docker ps --format '{tmpl}' {'--all' if all else ''}"
         r = await self._run(cmd, timeout=30.0)

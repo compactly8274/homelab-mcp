@@ -34,11 +34,13 @@ JSON API (no auth — bind to 127.0.0.1 only):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -95,6 +97,16 @@ class WebUIMiddleware(BaseHTTPMiddleware):
 
     # ----- static -----
 
+    # In-process cache for /api/dashboard. The WebUI refreshes on
+    # demand; a 5s window is short enough to stay fresh and long
+    # enough to absorb rapid double-clicks without re-running 3
+    # docker SSH/dialer ops per host.
+    # Fix 2026-07-18: previously every dashboard call hit docker
+    # directly, so refreshing in the browser felt laggy.
+    _DASHBOARD_CACHE_TTL_S: ClassVar[float] = 5.0
+    _dashboard_cache: ClassVar[dict[str, Any]] = {}  # {"data": ..., "ts": float}
+    _dashboard_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+
     def _serve_static(self, rel: str) -> Response:
         # Reject path-traversal attempts
         if ".." in rel or rel.startswith("/"):
@@ -102,7 +114,14 @@ class WebUIMiddleware(BaseHTTPMiddleware):
         f = _WEBUI_DIR / "static" / rel
         if not f.is_file():
             return JSONResponse({"error": "not found", "path": rel}, status_code=404)
-        return FileResponse(f)
+        # Fix 2026-07-18: emit a short Cache-Control header so the
+        # browser doesn't re-fetch every asset on every reload. The
+        # WebUI is plain vanilla JS with no versioning concern, so
+        # 5 min is safe. The index.html itself is served without
+        # this header (see _serve_index) so deploys pick up new JS.
+        resp = FileResponse(f)
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
 
     def _serve_index(self) -> Response:
         f = _WEBUI_DIR / "index.html"
@@ -121,6 +140,13 @@ class WebUIMiddleware(BaseHTTPMiddleware):
         # the same tool functions the LLM calls. The tool returns
         # a dict; we just JSON-encode it. Errors return 500 with
         # the exception message.
+        #
+        # Fix 2026-07-18: validation/missing-field errors previously
+        # came back as HTTP 200 with an {"error": ...} body, which
+        # broke monitoring and made the WebUI's `if (!r.ok)` branch
+        # the only place that knew it was an error. Handlers may now
+        # return either a dict (treated as 200) or a (dict, status)
+        # tuple; the latter is used for 400/404/409.
         try:
             handler = _API_HANDLERS.get(path)
             if handler is None:
@@ -131,8 +157,16 @@ class WebUIMiddleware(BaseHTTPMiddleware):
                     status_code=405,
                 )
             result = await handler["fn"](request)
-            log.info("webui api %s %s -> %d bytes", method, path, len(json.dumps(result, default=str)))
-            return JSONResponse(result)
+            if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], int):
+                body, status = result
+            else:
+                body, status = result, 200
+            log.info("webui api %s %s -> %d (%d bytes)", method, path, status, len(json.dumps(body, default=str)))
+            return JSONResponse(body, status_code=status)
+        except ValueError as e:
+            # Bad JSON or missing body — client error, not server error.
+            log.warning("webui api handler %s %s bad request: %s", method, path, e)
+            return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
             log.exception("webui api handler %s %s failed", method, path)
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -149,14 +183,28 @@ class WebUIMiddleware(BaseHTTPMiddleware):
 async def _api_dashboard(request: Request) -> dict[str, Any]:
     from homelab_mcp.tools.dashboard import health_dashboard_tool
     only_host = request.query_params.get("host") or None
-    return await health_dashboard_tool(only_host=only_host, top_problems=10)
+    cache_key = only_host or "__all__"
+    now = time.monotonic()
+    cached = WebUIMiddleware._dashboard_cache.get(cache_key)
+    if cached and (now - cached["ts"]) < WebUIMiddleware._DASHBOARD_CACHE_TTL_S:
+        return cached["data"]
+    # Coalesce concurrent requests for the same key — without the
+    # lock, two rapid clicks would each fire the full 3-call fan-out
+    # and add 3x the load on the docker daemons.
+    async with WebUIMiddleware._dashboard_lock:
+        cached = WebUIMiddleware._dashboard_cache.get(cache_key)
+        if cached and (now - cached["ts"]) < WebUIMiddleware._DASHBOARD_CACHE_TTL_S:
+            return cached["data"]
+        data = await health_dashboard_tool(only_host=only_host, top_problems=10)
+        WebUIMiddleware._dashboard_cache[cache_key] = {"data": data, "ts": time.monotonic()}
+        return data
 
 
 async def _api_pendings(request: Request) -> dict[str, Any]:
     from homelab_mcp.tools.updates import list_pending_updates_tool
     host = request.query_params.get("host")
     if not host:
-        return {"error": "host query param is required"}
+        return {"error": "host query param is required"}, 400
     rows = await list_pending_updates_tool(host=host)
     return {"host": host, "count": len(rows), "rows": rows}
 
@@ -166,7 +214,7 @@ async def _api_history(request: Request) -> dict[str, Any]:
     host = request.query_params.get("host")
     stack = request.query_params.get("stack")
     if not host or not stack:
-        return {"error": "host and stack query params are required"}
+        return {"error": "host and stack query params are required"}, 400
     limit = int(request.query_params.get("limit", "20"))
     rows = await get_update_history_tool(host=host, stack=stack, limit=limit)
     return {"host": host, "stack": stack, "rows": rows}
@@ -183,7 +231,7 @@ async def _api_preflight(request: Request) -> dict[str, Any]:
     stack = request.query_params.get("stack")
     action = request.query_params.get("action", "apply_update")
     if not host or not stack:
-        return {"error": "host and stack query params are required"}
+        return {"error": "host and stack query params are required"}, 400
     return await preflight_check_tool(host=host, stack=stack, action=action)
 
 
@@ -193,7 +241,7 @@ async def _api_apply(request: Request) -> dict[str, Any]:
     required = ("host", "stack")
     missing = [k for k in required if not body.get(k)]
     if missing:
-        return {"error": f"missing required fields: {missing}"}
+        return {"error": f"missing required fields: {missing}"}, 400
     return await apply_update_tool(
         host=body["host"],
         stack=body["stack"],
@@ -209,7 +257,7 @@ async def _api_container_action(request: Request) -> dict[str, Any]:
     required = ("host", "target", "action")
     missing = [k for k in required if not body.get(k)]
     if missing:
-        return {"error": f"missing required fields: {missing}"}
+        return {"error": f"missing required fields: {missing}"}, 400
     return await container_action_tool(
         host=body["host"],
         target=body["target"],
@@ -227,7 +275,7 @@ async def _api_dismiss(request: Request) -> dict[str, Any]:
     required = ("host", "stack", "latest_digest")
     missing = [k for k in required if not body.get(k)]
     if missing:
-        return {"error": f"missing required fields: {missing}"}
+        return {"error": f"missing required fields: {missing}"}, 400
     return await pending_update_dismiss_tool(
         host=body["host"],
         stack=body["stack"],
@@ -265,7 +313,13 @@ _API_HANDLERS: dict[str, dict[str, Any]] = {
 
 
 async def _read_json_body(request: Request) -> dict[str, Any]:
-    """Read the request body as JSON, with a useful error on bad input."""
+    """Read the request body as JSON, with a useful error on bad input.
+
+    Returns an empty dict for empty bodies (callers can treat that as
+    "no body" and validate against missing fields, which then return 400
+    from the handler). Raises ValueError on malformed JSON — the API
+    handler in WebUIMiddleware maps that to a 400.
+    """
     raw = await request.body()
     if not raw:
         return {}

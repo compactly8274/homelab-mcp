@@ -304,6 +304,11 @@ class State:
         the timestamp of the last completed update (if any). All
         queries are best-effort: if a table is missing, we report
         0 / null for that field.
+
+        Fix 2026-07-18: ``last_scan_ts`` used to read from ``stacks``,
+        but the scanner only writes to ``pending_updates`` (the ``stacks``
+        table stays empty in normal operation). Fall back to
+        ``pending_updates.last_seen_at`` so the field actually populates.
         """
         out: dict = {}
 
@@ -328,10 +333,18 @@ class State:
         except Exception:
             out["pending_updates"] = 0
 
+        # Prefer pending_updates.last_seen_at (populated by every scan)
+        # over stacks.last_checked_at (which the scanner does not write
+        # in normal operation). If both are null, leave the field null.
         try:
-            out["last_scan_ts"] = await _scalar(
-                "SELECT MAX(last_checked_at) FROM stacks"
+            ts = await _scalar(
+                "SELECT MAX(last_seen_at) FROM pending_updates"
             )
+            if ts is None:
+                ts = await _scalar(
+                    "SELECT MAX(last_checked_at) FROM stacks"
+                )
+            out["last_scan_ts"] = ts
         except Exception:
             out["last_scan_ts"] = None
 

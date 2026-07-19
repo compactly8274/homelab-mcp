@@ -159,7 +159,10 @@ def test_api_apply_post_missing_fields() -> None:
     app = _build_app()
     with TestClient(app) as c:
         r = c.post("/api/apply", json={"host": "truenas"})  # no stack
-    assert r.status_code == 200  # handler returns {"error": ...}, not 400
+    # As of 2026-07-18 the handler returns (body, 400) for missing fields
+    # (was previously 200 with the same body). Both are semantically
+    # correct; we now prefer the proper status code.
+    assert r.status_code == 400
     assert "missing required fields" in r.json()["error"]
 
 
