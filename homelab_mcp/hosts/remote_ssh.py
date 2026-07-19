@@ -165,8 +165,17 @@ class RemoteSSH:
         return r.stdout if r.ok else r.stderr
 
     async def events(self, since_seconds: int = 300) -> list[dict[str, Any]]:
+        # Pin now() so the window is stable for the duration of the call.
+        # Without --until, `docker events` blocks waiting for new events
+        # and the SSH command hits the _run timeout (15s) on quiet hosts.
+        # Fix 2026-07-18: matches the same fix applied to LocalDocker.events().
+        import time as _time
+        now = int(_time.time())
+        until_ts = now
+        since_ts = now - int(since_seconds)
         r = await self._run(
-            f"docker events --since {int(since_seconds)}s --format '{{{{json .}}}}'",
+            f"docker events --since {since_ts} --until {until_ts} "
+            f"--format '{{{{json .}}}}'",
             timeout=15.0,
         )
         out: list[dict[str, Any]] = []
