@@ -162,11 +162,11 @@ class RemoteSSH:
             # LocalDocker.list_containers, where missing labels
             # default to ''.
             out.append({
-                "NAME": parts[0],
-                "IMAGE": parts[1],
-                "STATE": parts[2],
-                "STATUS": parts[3],
-                "ID": parts[4],
+                "NAME": parts[0].removeprefix("NAME="),
+                "IMAGE": parts[1].removeprefix("IMAGE="),
+                "STATE": parts[2].removeprefix("STATE="),
+                "STATUS": parts[3].removeprefix("STATUS="),
+                "ID": parts[4].removeprefix("ID="),
                 "PROJECT": parts[5].removeprefix("PROJECT="),
                 "SERVICE": parts[6].removeprefix("SERVICE="),
                 "WORKDIR": parts[7].removeprefix("WORKDIR="),
