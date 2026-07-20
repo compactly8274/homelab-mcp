@@ -266,6 +266,30 @@ async def _api_container_action(request: Request) -> dict[str, Any]:
     )
 
 
+async def _api_heal(request: Request) -> dict[str, Any]:
+    """Run auto-heal: either on a single container or scan-and-heal a host.
+
+    Body:
+        host:           required, host alias
+        name:           optional, container name. If supplied, heal that
+                        one container. If omitted, scan the whole host
+                        and heal every unhealthy container found.
+        settle_seconds: optional, int (default 10)
+    """
+    from homelab_mcp.tools.auto_heal import auto_heal_container_tool, auto_heal_scan_tool
+    body = await _read_json_body(request)
+    if not body.get("host"):
+        return {"error": "host is required"}, 400
+    settle = int(body.get("settle_seconds", 10))
+    if body.get("name"):
+        return await auto_heal_container_tool(
+            host=body["host"], name=body["name"], settle_seconds=settle,
+        )
+    return await auto_heal_scan_tool(
+        host=body["host"], settle_seconds=settle,
+    )
+
+
 async def _api_dismiss(request: Request) -> dict[str, Any]:
     # pending_update_dismiss_tool lives in tools/updates.py, not tools/dismiss_all_pending.py
     # (dismiss_all_pending.py exports the bulk dismiss_all_pending_tool only).
@@ -307,6 +331,7 @@ _API_HANDLERS: dict[str, dict[str, Any]] = {
     "/api/preflight":        {"fn": _api_preflight,        "methods": ("GET",)},
     "/api/apply":            {"fn": _api_apply,            "methods": ("POST",)},
     "/api/container_action": {"fn": _api_container_action, "methods": ("POST",)},
+    "/api/heal":             {"fn": _api_heal,             "methods": ("POST",)},
     "/api/dismiss":          {"fn": _api_dismiss,          "methods": ("POST",)},
     "/api/stacks":           {"fn": _api_stacks,           "methods": ("GET",)},
 }

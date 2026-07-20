@@ -85,6 +85,7 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.apply_all_pending
     import homelab_mcp.tools.apply_update
     import homelab_mcp.tools.arr
+    import homelab_mcp.tools.auto_heal
     import homelab_mcp.tools.container_action
     import homelab_mcp.tools.dashboard
     import homelab_mcp.tools.dismiss_all_pending

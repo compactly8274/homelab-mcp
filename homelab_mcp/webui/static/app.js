@@ -298,5 +298,37 @@ $("#pendings-host").addEventListener("change", loadPendings);
 $("#history-refresh").addEventListener("click", loadHistory);
 $("#history-host").addEventListener("change", loadHistory);
 
+// ----- auto-heal -----
+// Run scan+heal on every host that appears in the dashboard cache. If
+// no dashboard data is loaded yet, fall back to all configured hosts.
+async function runDashboardHeal() {
+  const out = $("#dashboard-heal-result");
+  out.textContent = "running...";
+  const hosts = (state.dashboardCache?.hosts || []).map(h => h.host);
+  if (hosts.length === 0) {
+    const stacks = await loadStacks();
+    for (const h of stacks.hosts) hosts.push(h.name);
+  }
+  if (hosts.length === 0) {
+    out.textContent = "no hosts configured";
+    return;
+  }
+  const results = [];
+  for (const host of hosts) {
+    try {
+      const r = await api("POST", "/api/heal", { host });
+      results.push({ host, ...r });
+    } catch (e) {
+      results.push({ host, error: e.message });
+    }
+  }
+  out.textContent = results.map(r =>
+    `${r.host}: scanned ${r.scanned ?? "?"}, unhealthy ${r.unhealthy_found ?? "?"}, healed ${r.healed ?? "?"}, needs_human ${r.needs_human ?? "?"}`
+  ).join(" | ");
+  // Refresh the dashboard so the user sees the new container counts.
+  loadDashboard();
+}
+$("#dashboard-heal").addEventListener("click", runDashboardHeal);
+
 loadStacks();
 showView("dashboard");
