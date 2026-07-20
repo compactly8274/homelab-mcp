@@ -1,0 +1,6 @@
+# homelab-mcp public keys for racknerd1 and racknerd2
+# Transient: this file will be deleted once the racknerds are wired in.
+# Use the URLs from raw.githubusercontent.com to fetch the keys byte-perfect.
+
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPAQ7JwxtrfSBS85hsJc7V1vWr8p2hQxMvSvrW+IaVoy homelab-mcp@truenas for racknerd1
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAx6TUM9KVW13IXv76tKjp/92yvne0NVVlYpg1dDdcqk homelab-mcp@truenas for racknerd2
