@@ -68,23 +68,40 @@ def image_to_github_repo(image: str) -> str | None:
             # owner only — not enough info
             return None
         if len(sub) == 2:
-            return f"{sub[0]}/{sub[1]}"
+            # Strip any :tag or @digest so we return owner/repo, not
+            # owner/repo:tag. GitHub's API only takes owner/repo.
+            return f"{sub[0]}/{_strip_tag(sub[1])}"
         # 3+ segments: owner / sub-repo / image; use first two
-        return f"{sub[0]}/{sub[1]}"
+        return f"{sub[0]}/{_strip_tag(sub[1])}"
     if registry == "quay.io":
         sub = rest.split("/")
         if len(sub) >= 2:
-            return f"{sub[0]}/{sub[1]}"
+            return f"{sub[0]}/{_strip_tag(sub[1])}"
         return None
     if registry == "lscr.io":
         # lscr.io/linuxserver/<name> -> linuxserver/docker-<name>
         if rest.startswith("linuxserver/"):
             name = rest.split("/", 1)[1]
-            return f"linuxserver/docker-{name}"
+            return f"linuxserver/docker-{_strip_tag(name)}"
         return None
     # Docker Hub: any 'user/repo' string we'd need to look up via
     # the Docker Hub API. Skip for now (we can wire this later).
     return None
+
+
+def _strip_tag(image_or_repo: str) -> str:
+    """Strip the ``:tag`` or ``@digest`` suffix from a docker image ref.
+
+    Used by ``image_to_github_repo`` so we don't accidentally include
+    the tag (e.g. ``:latest``) in a GitHub ``owner/repo`` lookup.
+    """
+    # @digest first (digests contain colons in the algorithm prefix, so
+    # we need to handle them before splitting on ':').
+    if "@" in image_or_repo:
+        return image_or_repo.split("@", 1)[0]
+    if ":" in image_or_repo:
+        return image_or_repo.split(":", 1)[0]
+    return image_or_repo
 
 
 def is_probable_github_repo(s: str) -> bool:
