@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -145,7 +146,20 @@ class _HttpGet(Protocol):
 
 async def _get_release(repo: str, client: _HttpGet) -> dict[str, Any] | None:
     url = f"https://api.github.com/repos/{repo}/releases/latest"
-    r = await client.get(url, headers={"Accept": "application/vnd.github+json"})
+    headers = {"Accept": "application/vnd.github+json"}
+    # Authenticate if a GitHub token is configured. Anonymous requests
+    # to api.github.com are limited to 60/hr per IP; with 100+ pending
+    # updates the auto-apply sweep exhausts that within a single poll
+    # cycle, causing every fetch to return 403 and every note lookup
+    # to fall through to "no release notes fetched". A token bumps
+    # the limit to 5000/hr.
+    # Fix 2026-07-19: previously the fetcher was hardcoded anonymous,
+    # silently breaking the LLM risk-classification path on the
+    # second poll of the day.
+    token = os.environ.get("HOMELAB_MCP_GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = await client.get(url, headers=headers)
     if r.status_code != 200:
         return None
     try:
