@@ -67,7 +67,10 @@ def test_run_loop_refuses_to_apply_to_self_stack(monkeypatch, tmp_path) -> None:
 
     # Mock build_hosts so we don't try to construct real RemoteSSH clients
     # (which need an SSH config file). The test only cares about the
-    # self-protection logic, not the host client construction.
+    # self-protection logic, not the host client construction. Patch at
+    # the source-module level (homelab_mcp.server) so the canary's
+    # `from homelab_mcp import server; ... server.build_hosts(...)` call
+    # picks up the mock.
     fake_hosts = {"truenas": MagicMock()}
 
     with patch("homelab_mcp.tools.updates.trigger_scan_tool",
@@ -77,7 +80,7 @@ def test_run_loop_refuses_to_apply_to_self_stack(monkeypatch, tmp_path) -> None:
          patch("homelab_mcp.tools.apply_update.apply_update_tool", fake_apply), \
          patch("homelab_mcp.tools.apply_update._build_notifier_from_settings",
                MagicMock(return_value=MagicMock(notify=AsyncMock()))), \
-         patch("homelab_mcp.scripts.canary_cron.server.build_hosts",
+         patch("homelab_mcp.server.build_hosts",
                MagicMock(return_value=fake_hosts)):
         summary = asyncio.run(canary_cron._run_canary())
 
