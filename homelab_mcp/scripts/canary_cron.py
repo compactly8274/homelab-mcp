@@ -54,11 +54,19 @@ log = logging.getLogger("homelab_mcp.canary_cron")
 
 
 # Canary set: the 3 stacks the user picked in the WebUI scope Q.
+#
+# IMPORTANT: do NOT include the running homelab-mcp daemon stack here.
+# apply_update_tool for this stack runs `docker compose up -d` on the
+# homelab-mcp container itself, which restarts the daemon and kills the
+# gateway's MCP session every 6 hours. The canary is for *other* stacks
+# so we can detect bad updates without taking down the watcher.
+# (Defence in depth: even if a future change re-adds the daemon stack,
+# the self-protection check in _run_canary() will refuse to apply.)
 CANARY_STACKS: list[tuple[str, str]] = [
     # (host, stack) pairs. Order matters: most isolated first.
     ("truenas", "PlexAutoLanguages"),
     ("truenas", "dockwatch"),
-    ("truenas", "homelab-mcp"),
+    # homelab-mcp removed 2026-07-24: see defence-in-depth note above.
 ]
 
 
@@ -125,6 +133,29 @@ async def _run_canary() -> dict[str, Any]:
     # then apply if safe+would_apply.
     per_stack: list[dict[str, Any]] = []
     for host, stack in CANARY_STACKS:
+        # Defence in depth: refuse to ever apply to the stack that is
+        # running the homelab-mcp daemon itself. compose_up on that
+        # stack would restart the daemon, killing the gateway's MCP
+        # session. The canary is supposed to exercise *other* stacks.
+        # (See bug: every-6-hour MCP outage 2026-07-22 -> 2026-07-24.)
+        from homelab_mcp.config import Settings as _Settings
+        try:
+            _self_alias = _Settings().local_host_alias.lower()
+        except Exception:
+            _self_alias = "unraid"
+        _self_stack = os.environ.get("HOMELAB_MCP_SELF_STACK", "homelab-mcp")
+        if host.lower() == _self_alias and stack == _self_stack:
+            log.warning(
+                "canary: refusing to apply to self (%s/%s); this stack IS the daemon. "
+                "Remove it from CANARY_STACKS or set HOMELAB_MCP_SELF_STACK to override.",
+                host, stack,
+            )
+            per_stack.append({
+                "host": host, "stack": stack,
+                "outcome": "refused_self",
+                "reason": "stack is the running daemon; self-protection",
+            })
+            continue
         try:
             pendings = await list_pending_updates_tool(host=host)
             row = next((p for p in pendings if p.get("stack") == stack), None)
