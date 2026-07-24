@@ -47,6 +47,11 @@ def test_run_loop_refuses_to_apply_to_self_stack(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOMELAB_MCP_CANARY_CRON", "1")
     monkeypatch.setenv("HOMELAB_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("HOMELAB_MCP_SELF_STACK", "homelab-mcp")
+    # The daemon on truenas runs as the local alias "truenas", so the
+    # self-protection check matches against local_host_alias. We have to
+    # set that env var to "truenas" for the canary (running inside the
+    # truenas-deployed container) to see itself as the local daemon.
+    monkeypatch.setenv("HOMELAB_MCP_LOCAL_HOST_ALIAS", "truenas")
     monkeypatch.setattr("homelab_mcp.scripts.canary_cron.CANARY_STACKS",
                         [("truenas", "homelab-mcp")])
 
@@ -132,12 +137,19 @@ def test_run_canary_no_pendings_calls_notify(monkeypatch, tmp_path) -> None:
         assert s["outcome"] == "no_pending"
     # ntfy was sent
     assert fake_notifier.notify.called
-    # The body mentions both canary stacks (and does NOT mention homelab-mcp,
-    # since it's not in the canary set anymore)
+    # The body mentions both canary stacks by name
     body = fake_notifier.notify.call_args.args[0]
     assert "PlexAutoLanguages" in body
     assert "dockwatch" in body
-    assert "homelab-mcp" not in body
+    # Per-stack lines look like "truenas/PlexAutoLanguages: ..."; check the
+    # self-stack is NOT in any per-stack line. (The package name "homelab-mcp"
+    # appears in the title prefix, so we look for the "host/stack" form.)
+    for line in body.split("\n"):
+        line = line.strip()
+        if line.startswith("truenas/"):
+            assert "homelab-mcp" not in line, (
+                f"homelab-mcp leaked into per-stack line: {line!r}"
+            )
 
 
 def test_run_canary_would_not_apply_stops_before_real_apply(monkeypatch, tmp_path) -> None:
