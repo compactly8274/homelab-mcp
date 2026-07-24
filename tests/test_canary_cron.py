@@ -1,11 +1,16 @@
-"""Tests for the canary cron (v0.9.0).
+"""Tests for the canary cron (v0.9.0, v0.9.9: dropped self-stack).
 
 The cron orchestrates trigger_scan + list_pending + apply_update
 for a small set of "canary" stacks. We mock every tool call
 and verify:
-- 3 stacks in CANARY_STACKS (the user's pick)
+- 2 stacks in CANARY_STACKS (the user's pick — PlexAutoLanguages, dockwatch)
+  [v0.9.9: removed "homelab-mcp" because apply_update on the running daemon's
+  own stack would restart the daemon and kill the gateway's MCP session
+  every 6h. See canary_cron.py CANARY_STACKS docstring.]
 - scans run on each unique host
 - dry-run before real apply
+- self-protection: if someone re-adds the daemon's own stack, the run loop
+  refuses to apply (defence in depth)
 - ntfy summary sent on completion
 - HOMELAB_MCP_CANARY_CRON env var guards execution (default off)
 - main() exits 2 when the env var is missing
@@ -17,17 +22,57 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-def test_canary_stacks_contains_3_pairs() -> None:
+def test_canary_stacks_contains_2_pairs_and_excludes_self() -> None:
     from homelab_mcp.scripts.canary_cron import CANARY_STACKS
-    assert len(CANARY_STACKS) == 3
-    # The user's pick: PlexAutoLanguages, dockwatch, homelab-mcp
+    # v0.9.9: removed the homelab-mcp self-stack from the canary set.
+    # 2 stacks on truenas remain: PlexAutoLanguages, dockwatch.
+    assert len(CANARY_STACKS) == 2
     stack_names = [s for _, s in CANARY_STACKS]
     assert "PlexAutoLanguages" in stack_names
     assert "dockwatch" in stack_names
-    assert "homelab-mcp" in stack_names
-    # All on truenas
+    # The daemon's own stack MUST NOT be in the canary set — apply_update
+    # on it would restart the running container and kill the gateway's MCP
+    # session. (Defence-in-depth check: the run loop also refuses, but
+    # keeping the list clean is the primary control.)
+    assert "homelab-mcp" not in stack_names
     for host, _ in CANARY_STACKS:
         assert host == "truenas"
+
+
+def test_run_loop_refuses_to_apply_to_self_stack(monkeypatch, tmp_path) -> None:
+    """Defence-in-depth: even if the canary list is reconfigured to include
+    the daemon's own stack, the run loop must refuse to apply.
+    """
+    import asyncio
+    monkeypatch.setenv("HOMELAB_MCP_CANARY_CRON", "1")
+    monkeypatch.setenv("HOMELAB_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOMELAB_MCP_SELF_STACK", "homelab-mcp")
+    monkeypatch.setattr("homelab_mcp.scripts.canary_cron.CANARY_STACKS",
+                        [("truenas", "homelab-mcp")])
+
+    from homelab_mcp.scripts import canary_cron
+
+    # Make apply_update_tool FAIL the test loudly if it gets called —
+    # the self-protection should prevent any apply.
+    apply_called = {"n": 0}
+
+    async def fake_apply(*_a, **_kw):
+        apply_called["n"] += 1
+        return {"action": "APPLIED", "would_apply": True}
+
+    with patch("homelab_mcp.tools.updates.trigger_scan_tool",
+               AsyncMock(return_value=[])), \
+         patch("homelab_mcp.tools.updates.list_pending_updates_tool",
+               AsyncMock(return_value=[{"stack": "homelab-mcp"}])), \
+         patch("homelab_mcp.tools.apply_update.apply_update_tool", fake_apply), \
+         patch("homelab_mcp.tools.apply_update._build_notifier_from_settings",
+               MagicMock(return_value=MagicMock(notify=AsyncMock()))):
+        summary = asyncio.run(canary_cron._run_canary())
+
+    # Self-protection blocked the apply.
+    assert apply_called["n"] == 0
+    assert summary["stacks"][0]["outcome"] == "refused_self"
+    assert "self-protection" in summary["stacks"][0]["reason"]
 
 
 def test_main_refuses_when_env_var_not_set(monkeypatch) -> None:
@@ -55,7 +100,7 @@ def test_load_env_skips_comments_and_blanks(tmp_path) -> None:
 
 
 def test_run_canary_no_pendings_calls_notify(monkeypatch, tmp_path) -> None:
-    """All 3 stacks have no pending updates: still send a ntfy summary."""
+    """All 2 canary stacks have no pending updates: still send a ntfy summary."""
     import asyncio
     monkeypatch.setenv("HOMELAB_MCP_CANARY_CRON", "1")
     monkeypatch.setenv("HOMELAB_MCP_NTFY_TOPIC", "test-topic")
@@ -81,17 +126,18 @@ def test_run_canary_no_pendings_calls_notify(monkeypatch, tmp_path) -> None:
                return_value=fake_notifier):
         summary = asyncio.run(canary_cron._run_canary())
 
-    # All 3 stacks reported no_pending
-    assert len(summary["stacks"]) == 3
+    # Both canary stacks reported no_pending
+    assert len(summary["stacks"]) == 2
     for s in summary["stacks"]:
         assert s["outcome"] == "no_pending"
     # ntfy was sent
     assert fake_notifier.notify.called
-    # The body mentions all 3 stacks
+    # The body mentions both canary stacks (and does NOT mention homelab-mcp,
+    # since it's not in the canary set anymore)
     body = fake_notifier.notify.call_args.args[0]
     assert "PlexAutoLanguages" in body
     assert "dockwatch" in body
-    assert "homelab-mcp" in body
+    assert "homelab-mcp" not in body
 
 
 def test_run_canary_would_not_apply_stops_before_real_apply(monkeypatch, tmp_path) -> None:
