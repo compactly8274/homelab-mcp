@@ -138,11 +138,13 @@ async def _run_canary() -> dict[str, Any]:
         # stack would restart the daemon, killing the gateway's MCP
         # session. The canary is supposed to exercise *other* stacks.
         # (See bug: every-6-hour MCP outage 2026-07-22 -> 2026-07-24.)
-        from homelab_mcp.config import Settings as _Settings
-        try:
-            _self_alias = _Settings().local_host_alias.lower()
-        except Exception:
-            _self_alias = "unraid"
+        # Read HOMELAB_MCP_LOCAL_HOST_ALIAS directly from the env so we
+        # don't construct a full Settings (which would require a complete
+        # env: HOMELAB_MCP_HOSTS, HOMELAB_MCP_SSH_CONFIG, etc., and would
+        # raise in tests or partial envs).
+        _self_alias = os.environ.get(
+            "HOMELAB_MCP_LOCAL_HOST_ALIAS", "unraid"
+        ).lower()
         _self_stack = os.environ.get("HOMELAB_MCP_SELF_STACK", "homelab-mcp")
         if host.lower() == _self_alias and stack == _self_stack:
             log.warning(
