@@ -156,6 +156,18 @@ async def test_safe_verdict_is_applied() -> None:
     assert pipeline.call_args.kwargs["stack"] == "radarr"
     assert pipeline.call_args.kwargs["to_digest"] == "sha256:" + "b" * 64
     notifier.notify.assert_not_called()
+    # Regression guard: the pending row that triggered this apply
+    # must be dismissed on success, otherwise the canary cron
+    # would re-attempt the same apply every 6h. (This was the
+    # implicit contract the v0.9.10 dedup work depends on; the
+    # assertion was missing before v0.9.12 and a refactor of
+    # evaluate_and_act could silently drop the dismiss call
+    # without breaking this test.)
+    remaining = await state.list_pending_updates(host="unraid")
+    assert remaining == [], (
+        f"successful apply must dismiss the pending row; "
+        f"leftover: {remaining}"
+    )
 
 
 async def test_caution_verdict_applied_under_default_policy() -> None:
@@ -183,6 +195,12 @@ async def test_caution_verdict_applied_under_default_policy() -> None:
     assert out["action"] == "applied"
     pipeline.assert_awaited_once()
     notifier.notify.assert_not_called()
+    # Regression guard: same as test_safe_verdict_is_applied.
+    remaining = await state.list_pending_updates(host="unraid")
+    assert remaining == [], (
+        f"CAUTION apply under default policy must dismiss the "
+        f"pending row; leftover: {remaining}"
+    )
 
 
 async def test_caution_verdict_notified_under_safe_only() -> None:
@@ -210,12 +228,28 @@ async def test_caution_verdict_notified_under_safe_only() -> None:
     assert out["action"] == "notified_caution"
     pipeline.assert_not_awaited()
     notifier.notify.assert_awaited_once()
+    # v0.9.12: notify-only paths must also dismiss the pending
+    # row so the canary cron doesn't re-notify the same drift
+    # every 6h. The user has been informed; a newer digest will
+    # produce a new pending row on its own.
+    remaining = await state.list_pending_updates(host="unraid")
+    assert remaining == [], (
+        f"CAUTION-notified stack must dismiss the pending row; "
+        f"leftover: {remaining}"
+    )
 
 
 async def test_breaking_verdict_never_applies() -> None:
     """BREAKING → notify, never apply, regardless of policy."""
     state = State(db_path=Path("/tmp/auto_apply_breaking.db"))
     await state.init_db()
+    # v0.9.12: seed the pending row the apply tool would have
+    # looked up. The notify-only paths must dismiss it.
+    await state.record_pending_update(
+        host="unraid", stack="radarr",
+        current_digest="sha256:" + "a" * 64,
+        latest_digest="sha256:" + "b" * 64,
+    )
     host = _FakeHost("unraid", {
         "Config": {
             "Image": "x:latest",
@@ -239,6 +273,12 @@ async def test_breaking_verdict_never_applies() -> None:
     assert out["action"] == "notified_breaking"
     pipeline.assert_not_awaited()
     notifier.notify.assert_awaited_once()
+    # v0.9.12: see test_caution_verdict_notified_under_safe_only.
+    remaining = await state.list_pending_updates(host="unraid")
+    assert remaining == [], (
+        f"BREAKING-notified stack must dismiss the pending row; "
+        f"leftover: {remaining}"
+    )
 
 
 async def test_no_release_notes_treated_as_caution_default() -> None:
@@ -270,6 +310,13 @@ async def test_no_release_notes_notified_under_safe_only() -> None:
     """No notes + safe-only = notify."""
     state = State(db_path=Path("/tmp/auto_apply_no_notes_safe.db"))
     await state.init_db()
+    # v0.9.12: seed the pending row the apply tool would have
+    # looked up. The notify-only paths must dismiss it.
+    await state.record_pending_update(
+        host="unraid", stack="radarr",
+        current_digest="sha256:" + "a" * 64,
+        latest_digest="sha256:" + "b" * 64,
+    )
     host = _FakeHost("unraid", {
         "Config": {
             "Image": "x:latest",
@@ -291,6 +338,12 @@ async def test_no_release_notes_notified_under_safe_only() -> None:
     assert out["action"] == "notified_caution"
     pipeline.assert_not_awaited()
     notifier.notify.assert_awaited_once()
+    # v0.9.12: see test_caution_verdict_notified_under_safe_only.
+    remaining = await state.list_pending_updates(host="unraid")
+    assert remaining == [], (
+        f"no-notes + safe-only must dismiss the pending row; "
+        f"leftover: {remaining}"
+    )
 
 
 async def test_classifier_raising_falls_back_to_caution() -> None:
@@ -324,6 +377,14 @@ async def test_apply_failure_returns_action_failed() -> None:
     """A pipeline exception propagates as 'failed' action."""
     state = State(db_path=Path("/tmp/auto_apply_failed.db"))
     await state.init_db()
+    # v0.9.12: a failed apply must NOT dismiss the pending row,
+    # so the next cron cycle can retry. The success path dismisses;
+    # the failure path keeps it.
+    await state.record_pending_update(
+        host="unraid", stack="radarr",
+        current_digest="sha256:" + "a" * 64,
+        latest_digest="sha256:" + "b" * 64,
+    )
     host = _FakeHost("unraid", {
         "Config": {
             "Image": "x:latest",
@@ -340,6 +401,12 @@ async def test_apply_failure_returns_action_failed() -> None:
         run_pipeline=_boom, notifier=MagicMock(notify=AsyncMock()),
     )
     assert out["action"] == "failed"
+    # v0.9.12: row must still be there so the canary can retry.
+    remaining = await state.list_pending_updates(host="unraid")
+    assert len(remaining) == 1, (
+        f"failed apply must KEEP the pending row so the next "
+        f"cron cycle can retry; got: {remaining}"
+    )
 
 
 # -- dry_run --------------------------------------------------------------

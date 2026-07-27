@@ -6,6 +6,31 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.9.12] — 2026-07-27
+
+### Fixed
+- **Notify-only paths left the pending row in the queue.** When
+  `evaluate_and_act` returned `notified_breaking` or
+  `notified_caution` (policy=`safe-only`), the pending row was
+  never dismissed. The next canary cron cycle would re-notify
+  the same drift every 6 hours, even though the user had already
+  been informed. Both paths now call `mark_update_seen` after
+  notifying (in a try/except so a dismiss failure doesn't change
+  the user-visible result). A newer upstream digest will produce
+  a new pending row on its own, so the user can manually apply
+  via the WebUI with `force=True` if they want to override the
+  policy.
+
+### Tests
+- Added dismiss-row assertions to the SAFE / CAUTION+default /
+  CAUTION+safe-only / BREAKING / no-notes tests in
+  `test_auto_apply.py`. The SAFE-path assertion catches a
+  regression in the long-standing success dismiss; the
+  notify-path assertions catch the v0.9.12 fix itself.
+- Added inverse assertion to `test_apply_failure_returns_action_failed`:
+  a failed apply must KEEP the pending row so the next cron
+  cycle can retry. Locks in the success/failure asymmetry.
+
 ## [0.9.11] — 2026-07-27
 
 ### Fixed

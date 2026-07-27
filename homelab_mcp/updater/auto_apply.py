@@ -194,6 +194,16 @@ async def evaluate_and_act(
                 "dry_run": True,
             }
         await _notify_breaking(notifier, image=inputs.image, stack=project, verdict=verdict, notes=notes)
+        # BREAKING was notified but never applied. Dismiss the
+        # pending row so the canary cron doesn't re-notify the
+        # same drift every 6h. (The user already saw it; the
+        # apply_status column on the notification tells them what
+        # to do next, and a new pending row will appear if a
+        # newer upstream digest is published.)
+        try:
+            await state.mark_update_seen(host.name, project, inputs.to_digest)
+        except Exception as e:
+            log.warning("dismiss pending after BREAKING notify failed: %s", e)
         return {
             "action": "notified_breaking",
             "verdict": verdict.to_dict(),
@@ -232,6 +242,15 @@ async def evaluate_and_act(
                 notifier, image=inputs.image, stack=project,
                 verdict=verdict, notes=notes,
             )
+            # CAUTION under safe-only was notified but never
+            # applied. Dismiss the pending row so the canary cron
+            # doesn't re-notify the same drift every 6h. (If the
+            # user wants the apply, they can do it manually via
+            # the WebUI with force=True.)
+            try:
+                await state.mark_update_seen(host.name, project, inputs.to_digest)
+            except Exception as e:
+                log.warning("dismiss pending after CAUTION notify failed: %s", e)
             return {
                 "action": "notified_caution",
                 "verdict": verdict.to_dict(),
