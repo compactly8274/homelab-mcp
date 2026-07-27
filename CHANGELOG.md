@@ -6,6 +6,35 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.9.10] — 2026-07-27
+
+### Fixed
+- **`pending_updates` table was accumulating one row per upstream
+  rebuild.** The unique constraint was `(host, stack, latest_digest)`,
+  which meant every time the registry published a new digest the
+  scanner wrote a new row instead of updating the existing one. The
+  apply pipeline already only reads `rows[0]`, so the extra rows
+  were dead weight that inflated the dashboard count. For
+  `homelab-mcp` (rebuilt ~daily) this produced 6 rows; for the
+  Greenbone sub-stacks (rebuilt every few hours as their feed data
+  changes) it produced 7-8 each. After the fix: one row per stack,
+  with the live `(current_digest, latest_digest)` pair.
+
+### Changed
+- Schema: `UNIQUE (host, stack, latest_digest)` → `UNIQUE (host, stack)`.
+- `record_pending_update` now overwrites `current_digest` and
+  `latest_digest` on conflict; `first_seen_at` is preserved (it
+  tracks when the stack *first* started drifting, not the most
+  recent scan).
+- One-time migration on first startup after the upgrade: collapses
+  every `(host, stack)` with N rows down to 1 row (keeping the
+  newest `latest_digest` and the original `first_seen_at`), and
+  backfills the dropped N-1 transitions into `update_history` with
+  `status='drift_observed'` and a `reason` field pointing back to
+  this migration. The A→B→C→D chain is preserved in the history
+  table, not lost. Migration is gated on `PRAGMA user_version` so
+  it runs exactly once per database file.
+
 ## [0.9.0] — 2026-07-16
 
 ### Added

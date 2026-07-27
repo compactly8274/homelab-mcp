@@ -18,11 +18,15 @@ concurrent reader with ``OperationalError: database is locked``.
 
 from __future__ import annotations
 
+import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
+
+log = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS stacks (
@@ -63,7 +67,12 @@ CREATE TABLE IF NOT EXISTS pending_updates (
     latest_digest TEXT NOT NULL,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    UNIQUE (host, stack, latest_digest)
+    -- v0.9.10: one row per (host, stack). Previous schema was UNIQUE
+    -- (host, stack, latest_digest), which accumulated one row per
+    -- upstream rebuild (the apply pipeline only reads rows[0] so the
+    -- rest were dead weight, bloating the dashboard count and hiding
+    -- the real "which stacks are drifting" signal).
+    UNIQUE (host, stack)
 );
 """
 
@@ -106,12 +115,40 @@ class State:
         return db
 
     async def init_db(self) -> None:
-        """Create tables if they don't exist. Idempotent."""
+        """Create tables if they don't exist. Idempotent.
+
+        Also runs the v0.9.10 ``pending_updates`` dedup migration if
+        it hasn't been applied yet. The migration is gated on a
+        user-version PRAGMA so it runs exactly once per database file
+        even if init_db() is called multiple times.
+        """
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await self._connect()
         try:
             await db.executescript(SCHEMA_SQL)
-            await db.commit()
+            # Check user_version: 0 means pre-migration schema is in
+            # place; 1 means the dedup migration has been applied.
+            cur = await db.execute("PRAGMA user_version")
+            row = await cur.fetchone()
+            version = int(row[0]) if row else 0
+            if version < 1:
+                # The migration does its own commit/rollback. We
+                # commit the CREATE TABLE work above before we start
+                # so the table the migration reads is the just-created
+                # one (in case the user is on a very old DB that
+                # doesn't have it yet).
+                await db.commit()
+                await db.close()
+                result = await self.migrate_pending_updates_dedup()
+                # Bump the user_version so we don't run the
+                # migration again. We open a fresh connection so the
+                # PRAGMA + UPDATE is committed atomically.
+                db = await self._connect()
+                await db.execute("PRAGMA user_version = 1")
+                await db.commit()
+                log.info("pending_updates dedup migration applied: %s", result)
+            else:
+                await db.commit()
         finally:
             await db.close()
 
@@ -260,6 +297,16 @@ class State:
         current_digest: str,
         latest_digest: str,
     ) -> int:
+        """Upsert a single pending row per (host, stack).
+
+        v0.9.10: replaced the per-(host, stack, latest_digest) upsert
+        with a per-(host, stack) upsert. ``current_digest`` and
+        ``latest_digest`` are overwritten on conflict, ``first_seen_at``
+        is preserved (it's the original detection time for this stack's
+        drift), and ``last_seen_at`` is bumped to now. The apply
+        pipeline already assumes "one row per stack" (``rows[0]``);
+        this change makes the schema match the code's assumption.
+        """
         now = _now_iso()
         db = await self._connect()
         try:
@@ -268,13 +315,159 @@ class State:
                 INSERT INTO pending_updates
                     (host, stack, current_digest, latest_digest, first_seen_at, last_seen_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (host, stack, latest_digest) DO UPDATE SET
-                    last_seen_at = excluded.last_seen_at
+                ON CONFLICT (host, stack) DO UPDATE SET
+                    current_digest = excluded.current_digest,
+                    latest_digest = excluded.latest_digest,
+                    last_seen_at  = excluded.last_seen_at
                 """,
                 (host, stack, current_digest, latest_digest, now, now),
             )
             await db.commit()
             return cur.lastrowid or 0
+        finally:
+            await db.close()
+
+    async def migrate_pending_updates_dedup(self) -> dict:
+        """One-time migration for the v0.9.10 schema change.
+
+        Three things happen here, in this order, all inside a single
+        transaction so a crash mid-migration is recoverable on the
+        next startup (the migration is idempotent):
+
+        1. **Backfill the transition history** into ``update_history``
+           with ``status='drift_observed'``. For each (host, stack)
+           with N rows, write N-1 transition rows so the
+           A→B→C→D chain isn't lost. Each transition uses the
+           corresponding row's ``last_seen_at`` as the
+           ``started_at`` so the timing is preserved.
+        2. **Collapse to one row per (host, stack)**, keeping the row
+           with the newest ``latest_digest`` (i.e. the most recent
+           known state). ``first_seen_at`` is preserved from the row
+           that the original scanner wrote when the stack first
+           showed drift.
+        3. **Drop the old auto-index** SQLite created for the previous
+           unique constraint (``sqlite_autoindex_pending_updates_1``)
+           and re-create the new index on ``(host, stack)`` so future
+           scans stay fast.
+
+        Returns a small dict with the migration's effect so callers
+        can log it. The keys are ``stacks_collapsed``,
+        ``transitions_backfilled``, and ``rows_before``.
+        """
+        db = await self._connect()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            # Snapshot the current state for the effect-report
+            cur = await db.execute("SELECT COUNT(*) FROM pending_updates")
+            rows_before = int((await cur.fetchone())[0])
+
+            # 1) Backfill transitions into update_history.
+            #
+            # For each (host, stack) with >1 row, sort by last_seen_at
+            # ASC and emit one update_history row per consecutive pair.
+            # The original pair (A, B) became (A, B) in pending; the
+            # next observation (B, C) becomes a (B, C) transition.
+            # status='drift_observed' distinguishes scanner-detected
+            # drift from operator-applied updates.
+            cur = await db.execute(
+                """
+                SELECT host, stack, current_digest, latest_digest,
+                       first_seen_at, last_seen_at
+                FROM pending_updates
+                ORDER BY host, stack, last_seen_at ASC, id ASC
+                """
+            )
+            grouped: dict[tuple[str, str], list[aiosqlite.Row]] = {}
+            for r in await cur.fetchall():
+                key = (r[0], r[1])  # (host, stack)
+                grouped.setdefault(key, []).append(r)
+
+            transitions_backfilled = 0
+            for _key, rows_list in grouped.items():
+                if len(rows_list) < 2:
+                    continue
+                for i in range(len(rows_list) - 1):
+                    prev = rows_list[i]
+                    cur_row = rows_list[i + 1]
+                    # The transition we observed: local moved from
+                    # prev.latest_digest to cur_row.latest_digest. The
+                    # from_digest should be the previous observed
+                    # latest, the to_digest the current observed
+                    # latest. We use the cur_row's last_seen_at as
+                    # the transition timestamp.
+                    await db.execute(
+                        """
+                        INSERT INTO update_history
+                            (host, stack, from_digest, to_digest,
+                             status, started_at, finished_at, reason)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cur_row[0],         # host
+                            cur_row[1],         # stack
+                            prev[3],            # from_digest = prev latest
+                            cur_row[3],         # to_digest = cur latest
+                            "drift_observed",
+                            cur_row[5],         # started_at = cur last_seen_at
+                            cur_row[5],         # finished_at = same
+                            "v0.9.10 pending_updates dedup backfill",
+                        ),
+                    )
+                    transitions_backfilled += 1
+
+            # 2) Collapse to one row per (host, stack), keeping the
+            # newest by last_seen_at. We do this by recreating the
+            # table rather than wrestling with the old unique index.
+            await db.execute(
+                """
+                CREATE TABLE pending_updates_dedup (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    host TEXT NOT NULL,
+                    stack TEXT NOT NULL,
+                    current_digest TEXT NOT NULL,
+                    latest_digest TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    UNIQUE (host, stack)
+                )
+                """
+            )
+            await db.execute(
+                """
+                INSERT INTO pending_updates_dedup
+                    (host, stack, current_digest, latest_digest,
+                     first_seen_at, last_seen_at)
+                SELECT host, stack, current_digest, latest_digest,
+                       MIN(first_seen_at), MAX(last_seen_at)
+                FROM pending_updates
+                GROUP BY host, stack
+                """
+            )
+            # SQLite names the auto-index after the original table
+            # name, not the new one. Drop the old table, then the new
+            # one becomes pending_updates. This is the standard
+            # SQLite "rename and replace" pattern.
+            await db.execute("DROP TABLE pending_updates")
+            await db.execute("ALTER TABLE pending_updates_dedup RENAME TO pending_updates")
+
+            # 3) Drop the old auto-index if it still exists (it
+            # travels with the dropped table in most cases, but be
+            # defensive in case the user has an older SQLite).
+            with suppress(Exception):
+                await db.execute(
+                    "DROP INDEX IF EXISTS sqlite_autoindex_pending_updates_1"
+                )
+
+            await db.commit()
+            stacks_collapsed = len(grouped)
+            return {
+                "rows_before": rows_before,
+                "stacks_collapsed": stacks_collapsed,
+                "transitions_backfilled": transitions_backfilled,
+            }
+        except Exception:
+            await db.rollback()
+            raise
         finally:
             await db.close()
 
