@@ -118,9 +118,11 @@ class State:
         """Create tables if they don't exist. Idempotent.
 
         Also runs the v0.9.10 ``pending_updates`` dedup migration if
-        it hasn't been applied yet. The migration is gated on a
-        user-version PRAGMA so it runs exactly once per database file
-        even if init_db() is called multiple times.
+        it hasn't been applied yet, and the v0.9.11 orphaned
+        ``in_progress`` sweep on every startup (cheap, idempotent).
+        The migration is gated on a user-version PRAGMA so it runs
+        exactly once per database file even if init_db() is called
+        multiple times.
         """
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await self._connect()
@@ -147,8 +149,31 @@ class State:
                 await db.execute("PRAGMA user_version = 1")
                 await db.commit()
                 log.info("pending_updates dedup migration applied: %s", result)
+                # v0.9.11: also sweep any orphaned in_progress rows
+                # the moment the migration completes (in case the
+                # daemon was restarted mid-apply in the past and the
+                # rows predate this fix). Subsequent startups will
+                # re-sweep on their own.
+                swept = await self.sweep_orphaned_in_progress()
+                if swept:
+                    log.info(
+                        "swept %d orphaned in_progress rows after migration",
+                        len(swept),
+                    )
             else:
                 await db.commit()
+            # v0.9.11: on every startup (cheap, idempotent), recover
+            # any in_progress history rows left over from a daemon
+            # crash. This is the per-startup half of the fix; the
+            # migration branch above also runs it once for the case
+            # where the migration itself just upgraded a database
+            # that was full of orphans.
+            swept = await self.sweep_orphaned_in_progress()
+            if swept:
+                log.info(
+                    "swept %d orphaned in_progress rows at startup",
+                    len(swept),
+                )
         finally:
             await db.close()
 
@@ -563,5 +588,78 @@ class State:
             )
             await db.commit()
             return cur.rowcount
+        finally:
+            await db.close()
+
+    async def sweep_orphaned_in_progress(
+        self, max_age_seconds: int = 600
+    ) -> list[int]:
+        """Recover apply rows left in 'in_progress' by a daemon crash.
+
+        Background: the apply pipeline writes ``update_history`` rows
+        with ``status='in_progress'`` at the start of an apply, then
+        updates them to ``applied`` or ``rolled_back`` when the apply
+        finishes. If the daemon is killed mid-apply (OOM, host
+        restart, force-recreate) the row is left dangling. The next
+        scan will re-add a pending row for the same drift, but the
+        ``in_progress`` history row blocks the operator from seeing
+        the actual current state of that stack.
+
+        This sweep runs at startup (called from ``init_db`` after the
+        v0.9.10 migration) and marks any ``in_progress`` row older
+        than ``max_age_seconds`` as ``rolled_back`` with a clear
+        reason. The default 600s is conservative: even the slowest
+        legitimate apply finishes in well under 60s; anything still
+        ``in_progress`` after 10 minutes is orphaned.
+
+        Returns the list of ``row_id`` values that were swept, so
+        callers can log them. Idempotent — a second call is a no-op
+        because the rows are no longer ``in_progress``.
+        """
+        cutoff = _now_iso()  # naive: a real cutoff is "now - max_age_seconds"
+        # SQLite doesn't have date arithmetic in stock builds, and
+        # ISO 8601 strings sort lexically the same way they sort
+        # chronologically (when they're in the same format with
+        # consistent width). So a string-comparison cutoff is correct
+        # here. We just need to subtract max_age_seconds.
+        from datetime import timedelta
+        cutoff_dt = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+        cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+        db = await self._connect()
+        try:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT id, host, stack, from_digest, to_digest, started_at
+                FROM update_history
+                WHERE status = 'in_progress'
+                  AND started_at < ?
+                ORDER BY id ASC
+                """,
+                (cutoff,),
+            )
+            orphans = [dict(r) for r in await cur.fetchall()]
+            if not orphans:
+                return []
+            now = _now_iso()
+            for row in orphans:
+                await db.execute(
+                    """
+                    UPDATE update_history
+                    SET status = 'rolled_back',
+                        finished_at = ?,
+                        reason = COALESCE(reason, '') ||
+                                 ' | orphaned by daemon restart, auto-recovered at ' || ?
+                    WHERE id = ?
+                    """,
+                    (now, now, row["id"]),
+                )
+            await db.commit()
+            log.info(
+                "swept %d orphaned in_progress rows: %s",
+                len(orphans), [r["id"] for r in orphans],
+            )
+            return [r["id"] for r in orphans]
         finally:
             await db.close()

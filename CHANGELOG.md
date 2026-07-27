@@ -6,6 +6,34 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [0.9.11] — 2026-07-27
+
+### Fixed
+- **Canary cron was retrying permanent apply failures every 6h.**
+  When a stack's `compose.yaml` directory didn't exist on the host
+  (e.g. a stack that was added to the canary list before it was
+  actually deployed via dockge), `docker compose pull` would fail
+  with "stack dir does not exist", the pipeline would mark the
+  history row `rolled_back`, and the cron would try the same apply
+  again in 6 hours. This produced 117 rolled_back rows over 2.5
+  days for `homelab-mcp`, `dockwatch`, and `PlexAutoLanguages`
+  before the stack dirs were created on 2026-07-22. The pipeline
+  now distinguishes between *transient* failures (network blip,
+  registry hiccup — keep rolling back so the next cron cycle
+  retries) and *permanent* failures (missing stack dir — no point
+  retrying, mark `failed` and skip the rollback attempt). The
+  pending row stays in the queue either way; the operator must
+  either create the stack dir or dismiss the row.
+- **Orphaned `in_progress` history rows after a daemon crash.**
+  The apply pipeline writes an `in_progress` row at the start of
+  an apply and updates it to `applied` or `rolled_back` when it
+  finishes. If the daemon was killed mid-apply (OOM, host
+  restart, force-recreate) the row was left dangling in
+  `in_progress` forever. The v0.9.11 `sweep_orphaned_in_progress`
+  runs on every `init_db()` and recovers any `in_progress` row
+  older than 10 minutes as `rolled_back` with a clear reason
+  ("orphaned by daemon restart, auto-recovered at ...").
+
 ## [0.9.10] — 2026-07-27
 
 ### Fixed
