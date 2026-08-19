@@ -560,7 +560,7 @@ async def test_sweep_orphaned_in_progress_is_idempotent(
     state = State(db_path=tmp_path / "state.db")
     await state.init_db()
 
-    old_iso = (datetime.now(UTC) - timedelta(seconds=1200)).strftime(
+    old_iso = (datetime.now(UTC) - timedelta(seconds=7201)).strftime(
         "%Y-%m-%dT%H:%M:%S.%f"
     )[:-3] + "Z"
     db = await state._connect()
@@ -599,8 +599,9 @@ async def test_init_db_runs_sweep_on_every_startup(tmp_path: Path) -> None:
     db = await state._connect()
     try:
         await db.execute("PRAGMA user_version = 1")
-        # Insert an old in_progress row.
-        old_iso = (datetime.now(UTC) - timedelta(seconds=1200)).strftime(
+        # Insert an old in_progress row (older than the default 7200s sweep
+        # threshold so the every-startup sweep will recover it).
+        old_iso = (datetime.now(UTC) - timedelta(seconds=7201)).strftime(
             "%Y-%m-%dT%H:%M:%S.%f"
         )[:-3] + "Z"
         await db.execute(

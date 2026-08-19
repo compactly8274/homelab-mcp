@@ -602,6 +602,23 @@ async def evaluate_and_act(
             verdict = RiskVerdict(risk="CAUTION", summary=f"classifier raised: {e}")
 
     # 3. Apply the policy. For BREAKING or (safe-only + CAUTION), notify only.
+    #    Dry-run previews must short-circuit before any side effect so the
+    #    smart_apply tool can safely call evaluate_and_act(dry_run=True).
+    if dry_run and (
+        verdict.risk == "BREAKING" or (verdict.risk == "CAUTION" and policy == "safe-only")
+    ):
+        return {
+            "action": "dry_run",
+            "would_apply": False,
+            "verdict": verdict.to_dict(),
+            "notes_source": notes.source if notes else "",
+            "stack_dir": stack_dir,
+            "to_digest": inputs.to_digest,
+            "image": inputs.image,
+            "policy": policy,
+            "dry_run": True,
+        }
+
     if verdict.risk == "BREAKING":
         await notifier.notify_breaking(
             host.name, project, inputs.image, verdict.summary,
@@ -610,11 +627,10 @@ async def evaluate_and_act(
         # evaluate_and_act with dry_run=True just to get the verdict; if we
         # dismiss here, the subsequent real apply sees no pending row and
         # returns no_pending_update without ever updating the container.
-        if not dry_run:
-            try:
-                await state.mark_update_seen(host.name, inputs.stack, inputs.to_digest)
-            except Exception as e:
-                log.warning("dismiss pending after BREAKING notify failed: %s", e)
+        try:
+            await state.mark_update_seen(host.name, inputs.stack, inputs.to_digest)
+        except Exception as e:
+            log.warning("dismiss pending after BREAKING notify failed: %s", e)
         return {
             "action": "notified_breaking",
             "verdict": verdict.to_dict(),
@@ -626,11 +642,10 @@ async def evaluate_and_act(
         await notifier.notify_caution(
             host.name, project, inputs.image, verdict.summary,
         )
-        if not dry_run:
-            try:
-                await state.mark_update_seen(host.name, inputs.stack, inputs.to_digest)
-            except Exception as e:
-                log.warning("dismiss pending after CAUTION notify failed: %s", e)
+        try:
+            await state.mark_update_seen(host.name, inputs.stack, inputs.to_digest)
+        except Exception as e:
+            log.warning("dismiss pending after CAUTION notify failed: %s", e)
         return {
             "action": "notified_caution",
             "verdict": verdict.to_dict(),
