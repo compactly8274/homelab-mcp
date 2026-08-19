@@ -12,6 +12,7 @@ downstream tool surface doesn't care which backend produced the data.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shlex
@@ -66,10 +67,8 @@ def _load_long_apply() -> dict[str, int]:
         stacks = data.get("stacks") or {}
         if isinstance(stacks, dict):
             for name, secs in stacks.items():
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     result[str(name)] = int(secs)
-                except (TypeError, ValueError):
-                    pass
     except FileNotFoundError:
         pass
     except Exception as e:  # malformed yaml etc.

@@ -20,13 +20,13 @@ the right container regardless of which key form the row uses.
 """
 
 from __future__ import annotations
-import os
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Protocol
 
 import aiosqlite
 
@@ -169,11 +169,10 @@ async def _container_digest_and_health(
         if norm_current != norm_target:
             matched = False
             for rd in (info.get("RepoDigests") or []):
-                if isinstance(rd, str) and "@sha256:" in rd:
-                    if rd.split("@sha256:", 1)[1] == norm_target:
-                        current_digest = norm_target
-                        matched = True
-                        break
+                if isinstance(rd, str) and "@sha256:" in rd and rd.split("@sha256:", 1)[1] == norm_target:
+                    current_digest = norm_target
+                    matched = True
+                    break
             if not matched:
                 image_id = info.get("Image") or ""
                 if isinstance(image_id, str) and image_id.startswith("sha256:"):
@@ -185,10 +184,9 @@ async def _container_digest_and_health(
                             img_data = json.loads(img_r.stdout)
                             if isinstance(img_data, list) and img_data:
                                 for rd in img_data[0].get("RepoDigests") or []:
-                                    if isinstance(rd, str) and "@sha256:" in rd:
-                                        if rd.split("@sha256:", 1)[1] == norm_target:
-                                            current_digest = norm_target
-                                            break
+                                    if isinstance(rd, str) and "@sha256:" in rd and rd.split("@sha256:", 1)[1] == norm_target:
+                                        current_digest = norm_target
+                                        break
                     except Exception as e:
                         log.debug(
                             "reconcile: image inspect for target digest failed for %s/%s: %s",
@@ -694,7 +692,7 @@ async def evaluate_and_act(
             host, state,
             stack=project, to_digest=inputs.to_digest,
             image=inputs.image,
-            
+
             compose_manager_root=inputs.compose_manager_root,
             dockge_stacks_root=inputs.dockge_stacks_root,
         )

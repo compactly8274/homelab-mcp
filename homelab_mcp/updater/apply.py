@@ -391,8 +391,6 @@ async def apply_update(
             info = await host.inspect_container(c["NAME"])
             state = (info.get("State") or {})
             status = state.get("Status")
-            cfg = info.get("HostConfig", {})
-            restart_policy = (cfg.get("RestartPolicy") or {}).get("Name", "")
             # Skip completed one-shot sidecars (RestartPolicy=no, exited cleanly)
             # Skip containers that have already completed successfully
             # (common one-shot permission/utility sidecars in ix-apps stacks)

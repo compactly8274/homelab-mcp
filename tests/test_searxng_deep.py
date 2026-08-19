@@ -6,8 +6,6 @@ import asyncio
 import json as _json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from homelab_mcp.tools.searxng import deep_search, quick_search
 
 
@@ -37,7 +35,7 @@ class FakeAsyncClient:
         self._calls: list[tuple[str, str]] = []
         self._handlers: dict[tuple[str, str], object] = {}
 
-    def route(self, method: str, prefix: str, response: object) -> "FakeAsyncClient":
+    def route(self, method: str, prefix: str, response: object) -> FakeAsyncClient:
         self._handlers[(method, prefix)] = response
         return self
 

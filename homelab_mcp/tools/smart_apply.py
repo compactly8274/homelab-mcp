@@ -21,7 +21,6 @@ from homelab_mcp.server import get_host, get_state, mcp
 from homelab_mcp.updater.auto_apply import _Inputs, evaluate_and_act
 from homelab_mcp.updater.migration import MigrationStep
 from homelab_mcp.updater.notifier import Notifier
-from homelab_mcp.updater.pipeline import run_pipeline
 from homelab_mcp.updater.release_notes import fetch_release_notes
 from homelab_mcp.updater.risk import classify_release_notes
 from homelab_mcp.updater.smart_pipeline import run_smart_pipeline, smart_pipeline_to_dict
@@ -217,7 +216,6 @@ async def smart_apply_tool(
         # didn't because we passed dry_run=True. So notify here.
         try:
             from homelab_mcp.updater.auto_apply import _notify_breaking
-            notes = classification.get("notes_source") or ""
             from homelab_mcp.updater.release_notes import fetch_release_notes as _fr
             notes_obj = await _fr(image)
             await _notify_breaking(notifier, image=image, stack=stack,

@@ -31,13 +31,13 @@ Design choices (locked 2026-07-29):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
-import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import yaml  # pyyaml; already in homelab-mcp's deps for compose parsing
 
@@ -88,17 +88,13 @@ class WatchdogConfig:
     probes: list[Probe] = field(default_factory=list)
 
     @classmethod
-    def from_env(cls) -> "WatchdogConfig":
+    def from_env(cls) -> WatchdogConfig:
         cfg = cls()
         cfg.enabled = os.getenv("HOMELAB_MCP_WATCHDOG_ENABLED", "0") == "1"
-        try:
+        with contextlib.suppress(ValueError):
             cfg.timeout_s = float(os.getenv("HOMELAB_MCP_WATCHDOG_TIMEOUT_S", "180"))
-        except ValueError:
-            pass
-        try:
+        with contextlib.suppress(ValueError):
             cfg.poll_interval_s = float(os.getenv("HOMELAB_MCP_WATCHDOG_POLL_INTERVAL_S", "5"))
-        except ValueError:
-            pass
         cfg.tcp_fallback = os.getenv("HOMELAB_MCP_WATCHDOG_TCP_FALLBACK", "1") != "0"
         probes_path = os.getenv(
             "HOMELAB_MCP_WATCHDOG_PROBES_PATH", "/data/probes.yaml"
@@ -138,7 +134,7 @@ class WatchdogConfig:
 
 
 class _ProbeResult:
-    __slots__ = ("ok", "detail", "elapsed_ms", "phase")
+    __slots__ = ("detail", "elapsed_ms", "ok", "phase")
 
     def __init__(self, ok: bool, detail: str, elapsed_ms: int, phase: str):
         self.ok = ok
@@ -437,7 +433,7 @@ async def _discover_exposed_port(host: HostClient, container_name: str) -> int |
         return None
     ports = (info.get("NetworkSettings") or {}).get("Ports") or {}
     candidates: list[int] = []
-    for spec, bindings in ports.items():
+    for _spec, bindings in ports.items():
         # spec looks like "8080/tcp"; bindings is a list of
         # {"HostIp": ..., "HostPort": ...}
         for b in bindings or []:

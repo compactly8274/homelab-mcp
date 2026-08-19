@@ -31,14 +31,12 @@ Image-tag-swap fallback (your call: option 1b):
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from homelab_mcp.hosts.base import CommandResult, HostClient
-from homelab_mcp.state import State
 
 log = logging.getLogger(__name__)
 
@@ -221,12 +219,11 @@ async def snapshot_dockerman_container(
         return None
 
     state = (info.get("State") or {})
-    if state.get("Status") not in ("running", "exited"):
+    if state.get("Status") not in ("running", "exited") and state.get("Status") not in ("created",):
         # Exited is OK — we may be reviving it. "created" / "dead" not OK.
-        if state.get("Status") not in ("created",):
-            log.warning("dockerman snapshot: %s state=%s; refusing",
-                        container_name, state.get("Status"))
-            return None
+        log.warning("dockerman snapshot: %s state=%s; refusing",
+                    container_name, state.get("Status"))
+        return None
 
     cfg = (info.get("Config") or {})
     image_ref = cfg.get("Image") or ""
@@ -298,7 +295,7 @@ def _run_config_to_args(run_cfg: dict[str, Any], new_image: str,
     # --env-file (skip — we use --env inline)
 
     # --expose
-    for spec in (run_cfg.get("ExposedPorts") or {}).keys():
+    for spec in (run_cfg.get("ExposedPorts") or {}):
         side += ["--expose", spec]
 
     # --publish
@@ -412,7 +409,7 @@ def _build_docker_run_cmd(new_image: str, snapshot: DockermanSnapshot,
     positional, side = _run_config_to_args(
         snapshot.run_config, new_image, new_container_name or snapshot.container_name,
     )
-    parts = ["docker", "run"] + side + positional
+    parts = ["docker", "run", *side, *positional]
     return " ".join(_shell_quote(p) for p in parts)
 
 
@@ -783,10 +780,10 @@ async def dockerman_revert(
 
 
 __all__ = [
-    "DockermanSnapshot",
     "DockermanApplyResult",
-    "snapshot_dockerman_container",
+    "DockermanSnapshot",
+    "_build_docker_run_cmd",
     "dockerman_apply_update",
     "dockerman_revert",
-    "_build_docker_run_cmd",
+    "snapshot_dockerman_container",
 ]

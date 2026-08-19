@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import aiosqlite
 import logging
-from datetime import datetime, timedelta, timezone
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import aiosqlite
 
 from homelab_mcp.config import Settings
 from homelab_mcp.server import build_hosts
@@ -209,7 +210,7 @@ async def _reconcile_orphan_in_progress_rows(state: State, hosts: dict[str, Any]
                 "SELECT id, host, stack, started_at FROM update_history WHERE status = 'in_progress'"
             )
             rows = await cursor.fetchall()
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+            cutoff = datetime.now(UTC) - timedelta(minutes=15)
             fixed = 0
             for row in rows:
                 started = datetime.fromisoformat(row["started_at"].replace("Z", "+00:00"))
@@ -227,7 +228,7 @@ async def _reconcile_orphan_in_progress_rows(state: State, hosts: dict[str, Any]
                 if not live_process:
                     await db.execute(
                         "UPDATE update_history SET status='failed', finished_at=?, reason=? WHERE id=?",
-                        (datetime.now(timezone.utc).isoformat(),
+                        (datetime.now(UTC).isoformat(),
                          "startup reconciliation: orphan in_progress row", row["id"])
                     )
                     fixed += 1

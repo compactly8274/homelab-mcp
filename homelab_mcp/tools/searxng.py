@@ -27,7 +27,7 @@ import logging
 import re
 import time
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -62,27 +62,11 @@ _WS_RE = re.compile(r"\s+")
 # Query-classification hints for routing searches to the most useful engines.
 # The model/LLM can override via explicit category/engines parameters.
 _ACADEMIC_KEYWORDS = frozenset(
-    "arxiv paper preprint journal article doi pubmed medline"
-    " citation review literature meta-analysis"
-    " physics cosmology astrophysics astronomy quantum relativity"
-    " string theory brane dark matter black hole higgs neutrino"
-    " thermodynamics condensed matter plasma spectroscopy"
-    " chemistry biochemistry molecular cell biology genome protein"
-    " mathematics theorem proof algebra geometry topology analysis"
-    " thesis dissertation"
-    " chromodynamics gluon confinement quark hadron qcd qed"
-    " standard model particle physics electroweak asymptotic freedom"
-    " lattice qcd meson baryon fermion boson gauge theory"
-    .split()
+    ["arxiv", "paper", "preprint", "journal", "article", "doi", "pubmed", "medline", "citation", "review", "literature", "meta-analysis", "physics", "cosmology", "astrophysics", "astronomy", "quantum", "relativity", "string", "theory", "brane", "dark", "matter", "black", "hole", "higgs", "neutrino", "thermodynamics", "condensed", "matter", "plasma", "spectroscopy", "chemistry", "biochemistry", "molecular", "cell", "biology", "genome", "protein", "mathematics", "theorem", "proof", "algebra", "geometry", "topology", "analysis", "thesis", "dissertation", "chromodynamics", "gluon", "confinement", "quark", "hadron", "qcd", "qed", "standard", "model", "particle", "physics", "electroweak", "asymptotic", "freedom", "lattice", "qcd", "meson", "baryon", "fermion", "boson", "gauge", "theory"]
 )
 
 _GENERAL_TECH_KEYWORDS = frozenset(
-    "github repository api documentation tutorial howto guide"
-    " install configure deploy docker kubernetes linux error"
-    " troubleshooting bug issue changelog release notes"
-    " computer science algorithm machine learning neural network llm"
-    " dataset benchmark conference proceedings"
-    .split()
+    ["github", "repository", "api", "documentation", "tutorial", "howto", "guide", "install", "configure", "deploy", "docker", "kubernetes", "linux", "error", "troubleshooting", "bug", "issue", "changelog", "release", "notes", "computer", "science", "algorithm", "machine", "learning", "neural", "network", "llm", "dataset", "benchmark", "conference", "proceedings"]
 )
 
 # Fast, reliable general engines. Only include engines actually enabled on SearXNG.
@@ -183,7 +167,6 @@ async def _get_enabled_engines(client: httpx.AsyncClient, *, force_refresh: bool
     to category defaults.
     """
     global _enabled_engines_cache, _enabled_engines_cache_ts
-    now = time.time()
     if (
         not force_refresh
         and _enabled_engines_cache is not None
@@ -519,7 +502,7 @@ async def _maybe_enrich_results(
             for r in results
         ]
         pages = await asyncio.gather(*fetches, return_exceptions=True)
-    for r, page in zip(results, pages):
+    for r, page in zip(results, pages, strict=True):
         if isinstance(page, Exception):
             r["page"] = {"ok": False, "error": str(page)}
         else:
@@ -631,10 +614,7 @@ async def searxng_suggestions(query: str) -> dict[str, Any]:
     elif isinstance(data, list):
         # SearXNG /autocompleter returns either [query, [sug1, sug2, ...]]
         # or just a flat list of suggestions.
-        if len(data) == 2 and isinstance(data[1], list):
-            suggestions = data[1]
-        else:
-            suggestions = data
+        suggestions = data[1] if len(data) == 2 and isinstance(data[1], list) else data
     if not isinstance(suggestions, list):
         suggestions = []
     return {"query": query, "suggestions": [
@@ -855,7 +835,7 @@ async def deep_search(
                 for sq in subqueries
             ]
             search_results = await asyncio.gather(*searches, return_exceptions=True)
-            for sq, sr in zip(subqueries, search_results):
+            for sq, sr in zip(subqueries, search_results, strict=True):
                 if isinstance(sr, Exception):
                     log.warning("Deep search subquery failed: %s: %s", sq, sr)
     except Exception as e:

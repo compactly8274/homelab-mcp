@@ -36,14 +36,14 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
-import os
 import logging
+import os
 import shlex
 from typing import Any
 
 from homelab_mcp.hosts.base import HostClient
 from homelab_mcp.state import State
-from homelab_mcp.updater.registry import fetch_remote_digest, parse_image_ref, RegistryResult
+from homelab_mcp.updater.registry import fetch_remote_digest, parse_image_ref
 
 log = logging.getLogger(__name__)
 
