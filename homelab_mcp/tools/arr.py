@@ -91,7 +91,7 @@ _DEFAULTS: dict[str, str] = {
     "sonarr": "http://192.168.1.104:8989",
     "radarr": "http://192.168.1.104:7878",
     "lidarr": "http://192.168.1.104:8686",
-    "readarr": "http://192.168.1.104:8787",
+    "readarr": None,
 }
 
 _VALID_SERVICES = set(_API_VERSIONS)
@@ -112,7 +112,10 @@ def _url_and_key(service: str) -> tuple[str, str]:
     if service not in _VALID_SERVICES:
         raise ValueError(f"unknown service {service!r}; expected one of {sorted(_VALID_SERVICES)}")
     s = _get_settings()
-    base = getattr(s, f"{service}_url", "") or _DEFAULTS[service]
+    default = _DEFAULTS.get(service)
+    base = getattr(s, f"{service}_url", "") or default
+    if not base:
+        return None, ""
     key = getattr(s, f"{service}_api_key", "")
     return base.rstrip("/"), key
 
@@ -128,6 +131,8 @@ async def _arr_request(
     ``{"_ok": False, "error": str, "_url": str}`` on failure.
     """
     base, key = _url_and_key(service)
+    if not base:
+        return {"_ok": False, "_url": "", "error": f"{service} is not configured; this environment uses bookrec on port 8484 instead of readarr"}
     ver = _API_VERSIONS[service]
     url = f"{base}/api/{ver}{path}"
     headers: dict[str, str] = {"Accept": "application/json"}
@@ -158,7 +163,7 @@ async def arr_status(service: str) -> dict[str, Any]:
         return {"error": f"unknown service {service!r}; expected one of {sorted(_VALID_SERVICES)}"}
     r = await _arr_request(service, "/system/status")
     if not r.get("_ok"):
-        return {"error": r.get("error", "unknown"), "instance": _url_and_key(service)[0]}
+        return {"error": r.get("error", "unknown"), "instance": (_url_and_key(service)[0] or "not configured")}
     return {
         "service": service,
         "instance": _url_and_key(service)[0],
@@ -463,22 +468,36 @@ async def arr_disk_space(service: str) -> list[dict[str, Any]]:
 # --- Bulk / all-services --------------------------------------------------
 
 
+
+def _configured_services():
+    """Return *arr services that have a configured or defaulted URL."""
+    configured = []
+    for svc in sorted(_VALID_SERVICES):
+        try:
+            url, _ = _url_and_key(svc)
+            if url is not None:
+                configured.append(svc)
+        except Exception:
+            pass
+    return configured
+
+
 @mcp.tool()
 async def arr_status_all() -> dict[str, Any]:
     """Return status for all four *arr services in one call.
 
     Convenience tool for "is the whole stack healthy?" checks. Calls
-    ``arr_status`` for each of sonarr/radarr/lidarr/readarr in parallel
+    ``arr_status`` for each configured *arr service in parallel
     via asyncio.gather and returns a dict keyed by service.
 
     Returns:
-        dict with ``services`` (ordered {sonarr, radarr, lidarr, readarr},
+        dict with ``services`` (ordered by service name, only including configured services,
         each the same shape as ``arr_status``), and ``healthy_count``
         (int — services with version != null and no error key).
     """
     import asyncio
 
-    services = sorted(_VALID_SERVICES)
+    services = _configured_services()
     results = await asyncio.gather(
         *[arr_status(s) for s in services], return_exceptions=True
     )
@@ -491,7 +510,7 @@ async def arr_status_all() -> dict[str, Any]:
         out[svc] = res
         if "error" not in res and res.get("version"):
             healthy += 1
-    return {"services": out, "healthy_count": healthy, "total": len(_VALID_SERVICES)}
+    return {"services": out, "healthy_count": healthy, "total": len(services)}
 
 
 @mcp.tool()
@@ -502,14 +521,14 @@ async def arr_queue_all(limit: int = 25) -> dict[str, Any]:
         limit: per-service max items to return (default 25, max 200).
 
     Returns:
-        dict with ``queues`` (ordered {sonarr, radarr, lidarr, readarr},
+        dict with ``queues`` (ordered by service name, only including configured services,
         each a list of queue items in the same shape as ``arr_queue``),
         and ``totals`` ({service: count}) for quick triage.
     """
     import asyncio
 
     limit = max(1, min(200, int(limit)))
-    services = sorted(_VALID_SERVICES)
+    services = _configured_services()
     results = await asyncio.gather(
         *[arr_queue(s, limit=limit) for s in services], return_exceptions=True
     )
@@ -534,14 +553,14 @@ async def arr_wanted_all(limit: int = 25) -> dict[str, Any]:
         limit: per-service max items to return (default 25, max 200).
 
     Returns:
-        dict with ``wanted`` (ordered {sonarr, radarr, lidarr, readarr},
+        dict with ``wanted`` (ordered by service name, only including configured services,
         each a list in the same shape as ``arr_wanted``),
         and ``totals`` ({service: count}).
     """
     import asyncio
 
     limit = max(1, min(200, int(limit)))
-    services = sorted(_VALID_SERVICES)
+    services = _configured_services()
     results = await asyncio.gather(
         *[arr_wanted(s, limit=limit) for s in services], return_exceptions=True
     )
@@ -569,7 +588,7 @@ async def arr_search_all(term: str, limit: int = 10) -> dict[str, Any]:
         limit: per-service max results to return (default 10, max 50).
 
     Returns:
-        dict with ``results`` (ordered {sonarr, radarr, lidarr, readarr},
+        dict with ``results`` (ordered by service name, only including configured services,
         each a list in the same shape as ``arr_search_series``),
         and ``totals`` ({service: count}).
     """
@@ -578,7 +597,7 @@ async def arr_search_all(term: str, limit: int = 10) -> dict[str, Any]:
     if not term or not term.strip():
         return {"error": "term must be non-empty"}
     limit = max(1, min(50, int(limit)))
-    services = sorted(_VALID_SERVICES)
+    services = _configured_services()
     results = await asyncio.gather(
         *[arr_search_series(s, term, limit=limit) for s in services],
         return_exceptions=True,

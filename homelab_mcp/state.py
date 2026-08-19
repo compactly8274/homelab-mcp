@@ -592,7 +592,7 @@ class State:
             await db.close()
 
     async def sweep_orphaned_in_progress(
-        self, max_age_seconds: int = 600
+        self, max_age_seconds: int = 7200
     ) -> list[int]:
         """Recover apply rows left in 'in_progress' by a daemon crash.
 
@@ -608,7 +608,7 @@ class State:
         This sweep runs at startup (called from ``init_db`` after the
         v0.9.10 migration) and marks any ``in_progress`` row older
         than ``max_age_seconds`` as ``rolled_back`` with a clear
-        reason. The default 600s is conservative: even the slowest
+        reason. The default 7200s is conservative: even the slowest
         legitimate apply finishes in well under 60s; anything still
         ``in_progress`` after 10 minutes is orphaned.
 

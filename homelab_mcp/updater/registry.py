@@ -15,6 +15,7 @@ returns a single header, and that's all we need.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -170,9 +171,24 @@ async def fetch_remote_digest(
                             },
                         )
         if r.status_code == 200:
-            d = r.headers.get("Docker-Content-Digest")
-            if d:
-                return RegistryResult(kind="ok", digest=d, status_code=200)
+            content_type = r.headers.get("Content-Type", "").lower()
+            body = r.content
+            header_digest = r.headers.get("Docker-Content-Digest")
+
+            # For manifest lists / OCI indexes, the Docker-Content-Digest is the
+            # index digest. Docker clients need the per-platform manifest digest,
+            # otherwise `docker pull repo@index_digest` fails with "manifest unknown".
+            if "manifest.list.v2+json" in content_type or "image.index.v1+json" in content_type:
+                resolved = _resolve_platform_digest(body, header_digest)
+                if resolved:
+                    return RegistryResult(kind="ok", digest=resolved, status_code=200)
+                log.warning(
+                    "registry %s returned manifest list but no linux/amd64 platform digest; falling back to header digest",
+                    url,
+                )
+
+            if header_digest:
+                return RegistryResult(kind="ok", digest=header_digest, status_code=200)
             log.warning("registry %s returned 200 but no Docker-Content-Digest header", url)
             return RegistryResult(
                 kind="protocol_error", status_code=200, detail="missing Docker-Content-Digest"
@@ -194,3 +210,40 @@ async def fetch_remote_digest(
     finally:
         if own_client:
             await cli.aclose()
+
+
+def _resolve_platform_digest(body: bytes, fallback_digest: str | None) -> str | None:
+    """Return the linux/amd64 manifest digest from a manifest list / OCI index.
+
+    If the requested platform is not found, return the first available
+    platform digest as a fallback (common registries usually include amd64
+    first). Returns None only if the body is unparseable.
+    """
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        log.warning("manifest list body is not valid JSON, using header digest fallback")
+        return fallback_digest
+
+    manifests = data.get("manifests")
+    if not manifests:
+        return fallback_digest
+
+    for entry in manifests:
+        platform = entry.get("platform") or {}
+        if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
+            digest = entry.get("digest")
+            if digest:
+                return digest
+
+    # Fallback to first entry with a digest if linux/amd64 not found
+    for entry in manifests:
+        digest = entry.get("digest")
+        if digest:
+            log.warning(
+                "linux/amd64 platform not found in manifest list; using first available digest %s",
+                digest,
+            )
+            return digest
+
+    return fallback_digest
