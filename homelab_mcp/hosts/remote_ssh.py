@@ -364,6 +364,35 @@ class RemoteSSH:
             return CommandResult(2, "", f"unsupported action: {action}", 0)
         return await self._run(f"docker {action} {shlex.quote(name)}", timeout=30.0)
 
+    async def exec_in_container(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        workdir: str | None = None,
+        user: str | None = None,
+    ) -> CommandResult:
+        # Validate target container exists before running anything.
+        try:
+            await self.inspect_container(name)
+        except KeyError as e:
+            return CommandResult(2, "", f"container not found: {e}", 0)
+
+        cmd_parts = ["docker", "exec", "-i"]
+        if workdir:
+            cmd_parts.extend(["--workdir", shlex.quote(workdir)])
+        if user:
+            cmd_parts.extend(["--user", shlex.quote(user)])
+        if env:
+            for k, v in env.items():
+                cmd_parts.extend(["--env", f"{shlex.quote(k)}={shlex.quote(v)}"])
+        cmd_parts.append(shlex.quote(name))
+        cmd_parts.extend(shlex.quote(c) for c in command)
+        exec_cmd = " ".join(cmd_parts)
+        return await self._run(exec_cmd, timeout=timeout)
+
     async def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
         return await self._run(command, timeout=timeout)
 
