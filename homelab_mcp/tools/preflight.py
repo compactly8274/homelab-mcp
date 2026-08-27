@@ -131,7 +131,7 @@ async def preflight_check_tool(
         }
     """
     action = action.lower()
-    valid = {"remove", "stop", "restart", "apply_update", "dismiss_pending"}
+    valid = {"remove", "stop", "restart", "apply_update", "dismiss_pending", "exec_in_container"}
     if action not in valid:
         return {
             "safe": False,
@@ -231,6 +231,30 @@ async def preflight_check_tool(
                 f"Dismissing a pending update for a broken stack hides the problem. "
                 f"Fix the stack first, THEN dismiss."
             )
+
+        # exec_in_container-specific: target container must exist and
+        # be running. We don't exec into a restarting or broken container
+        # because the diagnostic results are unreliable and the container
+        # runtime may reject exec anyway.
+        if action == "exec_in_container":
+            if status not in ("running",):
+                blockers.append(
+                    f"{name} is not running (status={status!r}). "
+                    f"Refusing to exec into a non-running container."
+                )
+                if not alt:
+                    alt = f"Check stack_status_tool({host!r}, {stack!r}) and restart the container if appropriate."
+            if _is_in_restart_loop(ins):
+                warnings.append(
+                    f"{name} is in a restart loop "
+                    f"(restart_count={restart_count}, status={status!r}). "
+                    f"Exec may race with the restart; fix the root cause first."
+                )
+            if _started_recently(ins):
+                warnings.append(
+                    f"{name} started recently; exec into a container still "
+                    f"in its init phase may return misleading diagnostics."
+                )
 
     # Multi-container in same stack: removing the parent orphans
     # dependents. ``data["inspect"]`` contains the per-container
