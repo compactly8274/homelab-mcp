@@ -47,8 +47,13 @@ services:
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/scanner.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/scanner.py:ro
       - /root/.ssh/config:/root/.ssh/config:ro
 
-      # 2026-08-27: benchmark framework PR - mount checked-out branch code (remove before merge)
-      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp:/install/lib/python3.12/site-packages/homelab_mcp:ro
+      # Benchmark framework Phase 1 file-level mounts (do NOT replace with a directory mount):
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/base.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/base.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/local_docker.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/local_docker.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/remote_ssh.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/remote_ssh.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/exec_in_container.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/exec_in_container.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/preflight.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/preflight.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/server.py:/install/lib/python3.12/site-packages/homelab_mcp/server.py:ro
       # v0.9.14-hermes-2: smart_apply.py dry-run dismissal fix
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/smart_apply.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/smart_apply.py:ro
       # 2026-08-13: readarr replaced by bookrec on Unraid; skip unconfigured readarr in *arr bulk tools
@@ -67,7 +72,7 @@ services:
       # v0.9.13 hermes — Docker registry auth for auto-update pulls
       - /root/.docker/config.json:/root/.docker/config.json:ro
     environment:
-      HOMELAB_MCP_HOSTS: ${HOMELAB_MCP_HOSTS:-["truenas","unraid"]}
+      HOMELAB_MCP_HOSTS: ${HOMELAB_MCP_HOSTS:-["truenas","unraid","racknerd1","racknerd2"]}
       HOMELAB_MCP_PORT: ${HOMELAB_MCP_PORT:-18790}
       HOMELAB_MCP_SSH_CONFIG: ${HOMELAB_MCP_SSH_CONFIG:-/data/.ssh/config}
       HOMELAB_MCP_STATE_DIR: /data
