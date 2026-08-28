@@ -1,7 +1,7 @@
 """Tests for db_snapshot_tool and db_restore_tool.
 
 Covers:
-- Snapshot dumps DB content to host path.
+- Snapshot dumps DB content to host path using Python's stdlib sqlite3.
 - Restore validates snapshot and writes it back into container.
 - Preflight gate integration for restore.
 - Snapshot requires approval (database read).
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homelab_mcp.tools.db_restore import db_restore_tool
-from homelab_mcp.tools.db_snapshot import db_snapshot_tool
+from homelab_mcp.tools.db_restore import _RESTORE_SCRIPT, db_restore_tool
+from homelab_mcp.tools.db_snapshot import _DUMP_SCRIPT, db_snapshot_tool
 
 
 @dataclass
@@ -59,7 +59,7 @@ async def test_snapshot_success() -> None:
     assert r["snapshot_size_bytes"] > 0
     assert r["preflight"]["safe"] is True
     fake.exec_in_container.assert_awaited_once_with(
-        "prowlarr", ["sqlite3", "/data/db.sqlite", ".dump"], timeout=60.0
+        "prowlarr", ["python3", "-c", _DUMP_SCRIPT, "/data/db.sqlite"], timeout=60.0
     )
     fake.write_file.assert_awaited_once_with("/backups/db.sql", exec_result.stdout)
 
@@ -118,7 +118,7 @@ async def test_restore_success() -> None:
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
 
-    fake.read_file = AsyncMock(return_value=_CmdResult(stdout="PRAGMA foreign_keys=OFF;\nCREATE TABLE users (id INT);\n"))
+    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE users (id INT);\n")
 
     write_result = _CmdResult()
     fake.write_file = AsyncMock(return_value=write_result)
@@ -141,14 +141,15 @@ async def test_restore_success() -> None:
 
     assert r["ok"] is True
     assert r["preflight"]["safe"] is True
-    sqlite_calls = [c for c in fake.exec_in_container.call_args_list if c[0][1][0] == "sqlite3"]
-    assert len(sqlite_calls) == 1
-    called = sqlite_calls[0]
+    python_calls = [c for c in fake.exec_in_container.call_args_list if c[0][1][0] == "python3"]
+    assert len(python_calls) == 1
+    called = python_calls[0]
     assert called[0][0] == "prowlarr"
-    assert called[0][1][0] == "sqlite3"
-    assert called[0][1][1] == "/data/db.sqlite"
-    assert called[0][1][2].startswith(".read ")
-
+    assert called[0][1][0] == "python3"
+    assert called[0][1][1] == "-c"
+    assert called[0][1][2] == _RESTORE_SCRIPT
+    assert called[0][1][3] == "/data/db.sqlite"
+    assert called[0][1][4].startswith("/tmp/homelab-mcp-restore-")
 
 
 async def test_restore_rejects_invalid_snapshot() -> None:
@@ -156,7 +157,7 @@ async def test_restore_rejects_invalid_snapshot() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value=_CmdResult(stdout="hello world"))
+    fake.read_file = AsyncMock(return_value="hello world")
 
     with patch("homelab_mcp.tools.db_restore.get_host", return_value=fake), patch(
         "homelab_mcp.tools.db_restore.preflight_check_tool",
@@ -175,7 +176,7 @@ async def test_restore_preflight_blocked() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value=_CmdResult(stdout="PRAGMA foreign_keys=OFF;\n"))
+    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\n")
 
     with patch("homelab_mcp.tools.db_restore.get_host", return_value=fake), patch(
         "homelab_mcp.tools.db_restore.preflight_check_tool",
@@ -195,7 +196,7 @@ async def test_restore_host_write_failure() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value=_CmdResult(stdout="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n"))
+    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n")
 
     write_result = _CmdResult(ok=False, stderr="permission denied")
     fake.write_file = AsyncMock(return_value=write_result)
@@ -217,7 +218,7 @@ async def test_restore_container_copy_failure() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value=_CmdResult(stdout="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n"))
+    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n")
 
     write_result = _CmdResult()
     fake.write_file = AsyncMock(return_value=write_result)
