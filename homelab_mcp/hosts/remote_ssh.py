@@ -12,7 +12,9 @@ downstream tool surface doesn't care which backend produced the data.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import os
 import shlex
 import time
 from pathlib import Path
@@ -23,6 +25,79 @@ import asyncssh
 from homelab_mcp.hosts.base import CommandResult
 
 _SSH_TIMEOUT_S = 15.0
+
+# Long-apply timeout override: per-stack extended timeouts for
+# `docker compose pull` and `docker compose up -d`. Multi-container
+# stacks (e.g. greenbone = 14 services, popping = 5 services) can take
+# longer than the 5-min default. Operator-editable at /data/long_apply.yaml
+# (mounted from the host's /mnt/Data/appdata/homelab-mcp/long_apply.yaml).
+#
+# Format:
+#   stacks:
+#     <stack_name>: <seconds>
+#   # e.g.
+#   stacks:
+#     greenbone-community-edition: 1800
+#     popping: 900
+_LONG_APPLY_PATH = "/data/long_apply.yaml"
+_LONG_APPLY_DEFAULTS: dict[str, int] = {}  # built-in safe defaults
+_long_apply_cache: dict[str, int] | None = None
+_long_apply_cache_mtime: float = 0.0
+
+
+def _load_long_apply() -> dict[str, int]:
+    """Load the long-apply timeout overrides, with mtime-based caching.
+
+    Returns a dict mapping stack name -> seconds. Built-in defaults
+    are merged with operator overrides from /data/long_apply.yaml
+    (if present and parseable).
+    """
+    global _long_apply_cache, _long_apply_cache_mtime
+    try:
+        mtime = os.path.getmtime(_LONG_APPLY_PATH)
+    except OSError:
+        mtime = 0.0
+    if _long_apply_cache is not None and mtime == _long_apply_cache_mtime:
+        return _long_apply_cache
+    result: dict[str, int] = dict(_LONG_APPLY_DEFAULTS)
+    try:
+        import yaml
+        with open(_LONG_APPLY_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        stacks = data.get("stacks") or {}
+        if isinstance(stacks, dict):
+            for name, secs in stacks.items():
+                with contextlib.suppress(TypeError, ValueError):
+                    result[str(name)] = int(secs)
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # malformed yaml etc.
+        import logging
+        logging.getLogger(__name__).warning(
+            "long_apply.yaml parse failed: %s; using defaults", e
+        )
+    _long_apply_cache = result
+    _long_apply_cache_mtime = mtime
+    return result
+
+
+def _timeout_for_stack(stack_dir: str) -> float:
+    """Return the apply timeout (seconds) for a given stack_dir.
+
+    The stack name is the last path component of stack_dir. Falls
+    back to the default 300s (5 min) if not configured.
+    """
+    if not stack_dir:
+        return 300.0
+    try:
+        name = Path(stack_dir.rstrip("/")).name
+    except Exception:
+        return 300.0
+    overrides = _load_long_apply()
+    secs = overrides.get(name)
+    if secs is None or secs <= 0:
+        return 300.0
+    return float(secs)
 _SSH_QUIET = True  # suppress banner / motd in stdout
 
 
@@ -254,8 +329,10 @@ class RemoteSSH:
         check = await self._run(f"test -d {shlex.quote(stack_dir)}", timeout=5.0)
         if not check.ok:
             return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
+        project = Path(stack_dir.rstrip("/")).name
         return await self._run(
-            f"cd {shlex.quote(stack_dir)} && docker compose pull", timeout=300.0
+            f"cd {shlex.quote(stack_dir)} && docker compose -p {shlex.quote(project)} pull",
+            timeout=_timeout_for_stack(stack_dir),
         )
 
     async def compose_up(self, stack_dir: str) -> CommandResult:
@@ -264,8 +341,22 @@ class RemoteSSH:
         check = await self._run(f"test -d {shlex.quote(stack_dir)}", timeout=5.0)
         if not check.ok:
             return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
+        project = Path(stack_dir.rstrip("/")).name
         return await self._run(
-            f"cd {shlex.quote(stack_dir)} && docker compose up -d", timeout=300.0
+            f"cd {shlex.quote(stack_dir)} && docker compose -p {shlex.quote(project)} up -d",
+            timeout=_timeout_for_stack(stack_dir),
+        )
+
+    async def compose_up_force_recreate(self, stack_dir: str) -> CommandResult:
+        if not stack_dir or not stack_dir.strip():
+            return CommandResult(2, "", "stack_dir is empty", 0)
+        check = await self._run(f"test -d {shlex.quote(stack_dir)}", timeout=5.0)
+        if not check.ok:
+            return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
+        project = Path(stack_dir.rstrip("/")).name
+        return await self._run(
+            f"cd {shlex.quote(stack_dir)} && docker compose -p {shlex.quote(project)} up -d --force-recreate",
+            timeout=_timeout_for_stack(stack_dir),
         )
 
     async def container_action(self, name: str, action: str) -> CommandResult:
@@ -273,5 +364,35 @@ class RemoteSSH:
             return CommandResult(2, "", f"unsupported action: {action}", 0)
         return await self._run(f"docker {action} {shlex.quote(name)}", timeout=30.0)
 
+    async def exec_in_container(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        workdir: str | None = None,
+        user: str | None = None,
+    ) -> CommandResult:
+        # Validate target container exists before running anything.
+        try:
+            await self.inspect_container(name)
+        except KeyError as e:
+            return CommandResult(2, "", f"container not found: {e}", 0)
+
+        cmd_parts = ["docker", "exec", "-i"]
+        if workdir:
+            cmd_parts.extend(["--workdir", shlex.quote(workdir)])
+        if user:
+            cmd_parts.extend(["--user", shlex.quote(user)])
+        if env:
+            for k, v in env.items():
+                cmd_parts.extend(["--env", f"{shlex.quote(k)}={shlex.quote(v)}"])
+        cmd_parts.append(shlex.quote(name))
+        cmd_parts.extend(shlex.quote(c) for c in command)
+        exec_cmd = " ".join(cmd_parts)
+        return await self._run(exec_cmd, timeout=timeout)
+
     async def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
         return await self._run(command, timeout=timeout)
+

@@ -41,7 +41,12 @@ def test_api_version_map_lidarr_readarr_use_v1() -> None:
 def test_all_four_services_have_defaults() -> None:
     for svc in ("sonarr", "radarr", "lidarr", "readarr"):
         assert svc in arr._DEFAULTS
-        assert arr._DEFAULTS[svc].startswith("http")
+        default = arr._DEFAULTS[svc]
+        if default is None:
+            # Readarr is intentionally unset in this environment (bookrec is used).
+            assert svc == "readarr"
+        else:
+            assert default.startswith("http")
 
 
 def test_url_and_key_unknown_service_raises() -> None:

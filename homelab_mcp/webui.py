@@ -3,34 +3,6 @@
 The homelab-mcp daemon exposes its MCP tools via SSE. The same
 daemon process also serves a small WebUI at /ui/ that wraps the
 most useful tools in a browser-friendly form.
-
-The WebUI is opt-in via the HOMELAB_MCP_WEBUI_ENABLED env var
-(default: "true" — the WebUI is part of the v0.9.0 feature set;
-set to "false" to disable). When disabled, the middleware does
-nothing.
-
-Bind: 127.0.0.1 only. The user is expected to expose /ui/
-through their existing reverse proxy (NPM, Pangolin, Traefik)
-if remote access is needed; we deliberately do NOT bind to
-0.0.0.0 because the WebUI has no auth and is intended to be
-LAN-only.
-
-Pages:
-  GET  /ui/                       -> single-page UI (index.html)
-  GET  /ui/static/*               -> js, css (served from webui/static/)
-
-JSON API (no auth — bind to 127.0.0.1 only):
-  GET  /api/dashboard             -> health_dashboard_tool() result
-  GET  /api/pendings?host=X       -> list_pending_updates_tool(host)
-  GET  /api/history?host=X&stack=Y -> get_update_history_tool
-  GET  /api/notifier              -> notifier_status_tool()
-  GET  /api/preflight?host=X&stack=Y&action=Z -> preflight_check_tool
-  POST /api/apply                 -> {host, stack, force, dry_run, require_approval}
-                                     calls apply_update_tool
-  POST /api/container_action      -> {host, target, action, require_approval}
-                                     calls container_action_tool
-  POST /api/dismiss               -> {host, stack, latest_digest}
-                                     calls pending_update_dismiss_tool
 """
 from __future__ import annotations
 
@@ -42,7 +14,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
@@ -51,21 +22,19 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
-# Resolve webui/ dir once at import. In a wheel install, this lives
-# inside the package. In a dev checkout, it's at the repo root.
 _WEBUI_DIR = Path(__file__).parent / "webui"
 
 
-class WebUIMiddleware(BaseHTTPMiddleware):
-    """Add /ui/ static + /api/* JSON routes to the SSE app.
+class WebUIMiddleware:
+    """Add /ui/ static + /api/* JSON routes to the SSE app (pure ASGI).
 
-    Disabled when HOMELAB_MCP_WEBUI_ENABLED=false. The middleware
-    is still installed (cheap), it just no-ops on every request.
+    2026-08-17: Reimplemented as pure ASGI middleware because
+    BaseHTTPMiddleware buffers streaming responses and corrupts the
+    SSE/MCP message endpoint.
     """
 
     def __init__(self, app: Any, *, get_state: Any = None) -> None:
-        super().__init__(app)
+        self.app = app
         self._get_state = get_state
         self._enabled = os.environ.get("HOMELAB_MCP_WEBUI_ENABLED", "true").lower() in (
             "1", "true", "yes", "on",
@@ -73,52 +42,42 @@ class WebUIMiddleware(BaseHTTPMiddleware):
         if not self._enabled:
             log.info("WebUI disabled (HOMELAB_MCP_WEBUI_ENABLED=false)")
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
-        if not self._enabled:
-            return await call_next(request)
-        path = request.url.path
-        method = request.method
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or not self._enabled:
+            await self.app(scope, receive, send)
+            return
 
-        # Static files (CSS, JS, favicon)
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+
         if path.startswith("/ui/static/"):
-            return self._serve_static(path.removeprefix("/ui/static/"))
+            resp = self._serve_static(path.removeprefix("/ui/static/"))
+            await resp(scope=scope, receive=receive, send=send)
+            return
 
-        # The single-page UI
         if path in ("/ui", "/ui/") and method == "GET":
-            return self._serve_index()
+            resp = self._serve_index()
+            await resp(scope=scope, receive=receive, send=send)
+            return
 
-        # JSON API
         if path.startswith("/api/"):
-            return await self._handle_api(request, path, method)
+            request = Request(scope, receive=receive)
+            resp = await self._handle_api(request, path, method)
+            await resp(scope=scope, receive=receive, send=send)
+            return
 
-        # Everything else (including /sse, /messages, /health, /status)
-        # passes through to the wrapped app.
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
-    # ----- static -----
-
-    # In-process cache for /api/dashboard. The WebUI refreshes on
-    # demand; a 5s window is short enough to stay fresh and long
-    # enough to absorb rapid double-clicks without re-running 3
-    # docker SSH/dialer ops per host.
-    # Fix 2026-07-18: previously every dashboard call hit docker
-    # directly, so refreshing in the browser felt laggy.
     _DASHBOARD_CACHE_TTL_S: ClassVar[float] = 5.0
-    _dashboard_cache: ClassVar[dict[str, Any]] = {}  # {"data": ..., "ts": float}
+    _dashboard_cache: ClassVar[dict[str, Any]] = {}
     _dashboard_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
     def _serve_static(self, rel: str) -> Response:
-        # Reject path-traversal attempts
         if ".." in rel or rel.startswith("/"):
             return JSONResponse({"error": "bad path"}, status_code=400)
         f = _WEBUI_DIR / "static" / rel
         if not f.is_file():
             return JSONResponse({"error": "not found", "path": rel}, status_code=404)
-        # Fix 2026-07-18: emit a short Cache-Control header so the
-        # browser doesn't re-fetch every asset on every reload. The
-        # WebUI is plain vanilla JS with no versioning concern, so
-        # 5 min is safe. The index.html itself is served without
-        # this header (see _serve_index) so deploys pick up new JS.
         resp = FileResponse(f)
         resp.headers["Cache-Control"] = "public, max-age=300"
         return resp
@@ -132,21 +91,8 @@ class WebUIMiddleware(BaseHTTPMiddleware):
             )
         return FileResponse(f, media_type="text/html")
 
-    # ----- api -----
-
     async def _handle_api(self, request: Request, path: str, method: str) -> Response:
         log.info("webui api: %s %s", method, path)
-        # We dispatch by path. All endpoints are thin wrappers over
-        # the same tool functions the LLM calls. The tool returns
-        # a dict; we just JSON-encode it. Errors return 500 with
-        # the exception message.
-        #
-        # Fix 2026-07-18: validation/missing-field errors previously
-        # came back as HTTP 200 with an {"error": ...} body, which
-        # broke monitoring and made the WebUI's `if (!r.ok)` branch
-        # the only place that knew it was an error. Handlers may now
-        # return either a dict (treated as 200) or a (dict, status)
-        # tuple; the latter is used for 400/404/409.
         try:
             handler = _API_HANDLERS.get(path)
             if handler is None:
@@ -164,20 +110,11 @@ class WebUIMiddleware(BaseHTTPMiddleware):
             log.info("webui api %s %s -> %d (%d bytes)", method, path, status, len(json.dumps(body, default=str)))
             return JSONResponse(body, status_code=status)
         except ValueError as e:
-            # Bad JSON or missing body — client error, not server error.
             log.warning("webui api handler %s %s bad request: %s", method, path, e)
             return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
             log.exception("webui api handler %s %s failed", method, path)
             return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ----- api handlers -----
-# Each handler is a small async function that takes the request
-# and calls the relevant MCP tool. We import tools lazily to keep
-# startup fast and to avoid a chicken-and-egg between the webui
-# module and the tools module (which imports server, which sets
-# up mcp, which lists all tools).
 
 
 async def _api_dashboard(request: Request) -> dict[str, Any]:
@@ -188,9 +125,6 @@ async def _api_dashboard(request: Request) -> dict[str, Any]:
     cached = WebUIMiddleware._dashboard_cache.get(cache_key)
     if cached and (now - cached["ts"]) < WebUIMiddleware._DASHBOARD_CACHE_TTL_S:
         return cached["data"]
-    # Coalesce concurrent requests for the same key — without the
-    # lock, two rapid clicks would each fire the full 3-call fan-out
-    # and add 3x the load on the docker daemons.
     async with WebUIMiddleware._dashboard_lock:
         cached = WebUIMiddleware._dashboard_cache.get(cache_key)
         if cached and (now - cached["ts"]) < WebUIMiddleware._DASHBOARD_CACHE_TTL_S:
@@ -267,15 +201,6 @@ async def _api_container_action(request: Request) -> dict[str, Any]:
 
 
 async def _api_heal(request: Request) -> dict[str, Any]:
-    """Run auto-heal: either on a single container or scan-and-heal a host.
-
-    Body:
-        host:           required, host alias
-        name:           optional, container name. If supplied, heal that
-                        one container. If omitted, scan the whole host
-                        and heal every unhealthy container found.
-        settle_seconds: optional, int (default 10)
-    """
     from homelab_mcp.tools.auto_heal import auto_heal_container_tool, auto_heal_scan_tool
     body = await _read_json_body(request)
     if not body.get("host"):
@@ -291,9 +216,6 @@ async def _api_heal(request: Request) -> dict[str, Any]:
 
 
 async def _api_dismiss(request: Request) -> dict[str, Any]:
-    # pending_update_dismiss_tool lives in tools/updates.py, not tools/dismiss_all_pending.py
-    # (dismiss_all_pending.py exports the bulk dismiss_all_pending_tool only).
-    # Fix 2026-07-18: was importing from the wrong module → 500 on /api/dismiss.
     from homelab_mcp.tools.updates import pending_update_dismiss_tool
     body = await _read_json_body(request)
     required = ("host", "stack", "latest_digest")
@@ -308,7 +230,6 @@ async def _api_dismiss(request: Request) -> dict[str, Any]:
 
 
 async def _api_stacks(request: Request) -> dict[str, Any]:
-    """Return the configured hosts + their stacks, for the dropdowns."""
     from homelab_mcp import server
     out: dict[str, Any] = {"hosts": []}
     for name, host_client in server._host_clients.items():
@@ -338,13 +259,6 @@ _API_HANDLERS: dict[str, dict[str, Any]] = {
 
 
 async def _read_json_body(request: Request) -> dict[str, Any]:
-    """Read the request body as JSON, with a useful error on bad input.
-
-    Returns an empty dict for empty bodies (callers can treat that as
-    "no body" and validate against missing fields, which then return 400
-    from the handler). Raises ValueError on malformed JSON — the API
-    handler in WebUIMiddleware maps that to a 400.
-    """
     raw = await request.body()
     if not raw:
         return {}
@@ -354,11 +268,6 @@ async def _read_json_body(request: Request) -> dict[str, Any]:
         raise ValueError(f"body is not valid JSON: {e}") from e
 
 
-# ----- build_sse_app hook -----
-# We don't replace build_sse_app; instead we add WebUIMiddleware
-# alongside HealthAndStatusMiddleware. This is done in build_sse_app
-# below, exported for use by __main__.
 def build_webui_app(base_app: Any, *, get_state: Any = None) -> Any:
     """Wrap ``base_app`` with the WebUI middleware. Pass-through if disabled."""
-    base_app.add_middleware(WebUIMiddleware, get_state=get_state)
-    return base_app
+    return WebUIMiddleware(base_app, get_state=get_state)

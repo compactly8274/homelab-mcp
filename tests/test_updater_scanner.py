@@ -54,6 +54,16 @@ class _FakeHost:
     async def inspect_container(self, name: str) -> dict[str, Any]:
         return self._inspect_data
 
+    async def run_command(self, cmd: str, timeout: float = 30.0) -> Any:
+        # Pretend every compose-file candidate exists so project-keyed
+        # stacks are not silently skipped.
+        class _Result:
+            ok = True
+            stdout = "found"
+            stderr = ""
+            returncode = 0
+        return _Result()
+
 
 async def test_scan_host_records_drift_to_state(tmp_path: Path) -> None:
     """A drifted container is recorded as a pending_update."""
@@ -61,7 +71,7 @@ async def test_scan_host_records_drift_to_state(tmp_path: Path) -> None:
     await state.init_db()
     host = _FakeHost(
         name="unraid",
-        containers=[{"NAME": "radarr", "IMAGE": "ghcr.io/owner/img:latest", "STATE": "running"}],
+        containers=[{"NAME": "radarr", "IMAGE": "ghcr.io/owner/img:latest", "STATE": "running", "PROJECT": "radarr"}],
         inspect_data={
             "RepoDigests": ["ghcr.io/owner/img@sha256:" + "a" * 64],
             "Image": "sha256:" + "a" * 64,
@@ -93,7 +103,7 @@ async def test_scan_host_skips_when_digests_match(tmp_path: Path) -> None:
     await state.init_db()
     host = _FakeHost(
         name="unraid",
-        containers=[{"NAME": "sonarr", "IMAGE": "ghcr.io/owner/img:latest", "STATE": "running"}],
+        containers=[{"NAME": "sonarr", "IMAGE": "ghcr.io/owner/img:latest", "STATE": "running", "PROJECT": "sonarr"}],
         inspect_data={
             "RepoDigests": ["ghcr.io/owner/img@sha256:" + "a" * 64],
             "Image": "sha256:" + "a" * 64,
@@ -115,7 +125,7 @@ async def test_scan_host_skips_transient_registry_errors(tmp_path: Path) -> None
     await state.init_db()
     host = _FakeHost(
         name="unraid",
-        containers=[{"NAME": "qbittorrent", "IMAGE": "x:latest", "STATE": "running"}],
+        containers=[{"NAME": "qbittorrent", "IMAGE": "x:latest", "STATE": "running", "PROJECT": "qbittorrent"}],
         inspect_data={"RepoDigests": ["x@sha256:" + "a" * 64]},
     )
 
@@ -134,7 +144,7 @@ async def test_scan_host_skips_not_found_registry(tmp_path: Path) -> None:
     await state.init_db()
     host = _FakeHost(
         name="unraid",
-        containers=[{"NAME": "x", "IMAGE": "missing:latest", "STATE": "running"}],
+        containers=[{"NAME": "x", "IMAGE": "missing:latest", "STATE": "running", "PROJECT": "x"}],
         inspect_data={"RepoDigests": ["missing@sha256:" + "a" * 64]},
     )
 
@@ -152,7 +162,7 @@ async def test_scan_host_ignores_non_running_containers(tmp_path: Path) -> None:
     await state.init_db()
     host = _FakeHost(
         name="unraid",
-        containers=[{"NAME": "x", "IMAGE": "x:latest", "STATE": "exited"}],
+        containers=[{"NAME": "x", "IMAGE": "x:latest", "STATE": "exited", "PROJECT": "x"}],
         inspect_data={"RepoDigests": []},
     )
     async def _fake(*args, **kwargs):

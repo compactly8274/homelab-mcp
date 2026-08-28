@@ -1,0 +1,131 @@
+version: "3.9"
+
+# homelab-mcp Dockge stack for TrueNAS (the "main hub" config).
+#
+# When this stack runs, the daemon uses LocalDocker for the TrueNAS
+# socket and RemoteSSH for Unraid + any other downstream hosts.
+#
+# Set HOMELAB_MCP_HOSTS to include the local alias ('truenas') plus
+# the downstream hosts you want managed from here.
+
+services:
+  homelab-mcp:
+    image: ${IMAGE:-ghcr.io/your-org/homelab-mcp:latest}
+    container_name: homelab-mcp
+    restart: unless-stopped
+    network_mode: host
+    user: "0:999"   # root uid, docker gid (999) — needs docker.sock rw
+    group_add:
+      - "999"       # docker gid, in case user: is overridden by the runtime
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # v0.9.14-hermes: broad read-only mount so auto-update can reach any
+      # compose dir under appdata, not just the dockge/stacks subtree.
+      - /mnt/Data/appdata:/mnt/Data/appdata:ro
+      - /mnt/.ix-apps:/mnt/.ix-apps:ro
+      # v0.9.14-hermes: read-only mount so stacks like fail2ban (/root/fail2ban)
+      # are reachable by the auto-update pipeline.
+      - /root:/root:ro
+      # homelab-mcp's own state dir must stay read-write after the broad appdata mount.
+      - /mnt/Data/appdata/homelab-mcp:/data
+      # Keep the per-stack path mounted read-write in case future patches need to edit compose files.
+      - /mnt/Data/appdata/dockge/stacks:/mnt/Data/appdata/dockge/stacks:rw
+      # Hermes patch overrides (persisted on host, mounted ro into container):
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/auto_apply_main.py:/install/lib/python3.12/site-packages/homelab_mcp/auto_apply_main.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/auto_apply.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/auto_apply.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/state.py:/install/lib/python3.12/site-packages/homelab_mcp/state.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/apply.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/apply.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/risk.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/risk.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/remote_ssh.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/remote_ssh.py:ro
+      # Hermes patch: platform-aware registry digest resolution for scanner/applier alignment
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/registry.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/registry.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/notifier.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/notifier.py:ro
+      # Hermes patch: Discord + Pushover notifiers must implement the full Notifier protocol.
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/discord.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/discord.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/pushover.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/pushover.py:ro
+      # Hermes patch: override scanner.py so the drift scanner compares manifest digests instead of config digests.
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/scanner.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/scanner.py:ro
+      - /root/.ssh/config:/root/.ssh/config:ro
+
+      # Benchmark framework Phase 1 file-level mounts (do NOT replace with a directory mount):
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/base.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/base.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/local_docker.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/local_docker.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/hosts/remote_ssh.py:/install/lib/python3.12/site-packages/homelab_mcp/hosts/remote_ssh.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/exec_in_container.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/exec_in_container.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/preflight.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/preflight.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/server.py:/install/lib/python3.12/site-packages/homelab_mcp/server.py:ro
+      # v0.9.14-hermes-2: smart_apply.py dry-run dismissal fix
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/smart_apply.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/smart_apply.py:ro
+      # 2026-08-13: readarr replaced by bookrec on Unraid; skip unconfigured readarr in *arr bulk tools
+      #            and clear readarr URL default in config.py
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/arr.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/arr.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/config.py:/install/lib/python3.12/site-packages/homelab_mcp/config.py:ro
+      # 2026-08-20: accept image= kwarg passed by patched auto_apply.py without changing pipeline behavior
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/pipeline.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/pipeline.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/searxng.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/searxng.py:ro
+      # 2026-08-14: mesh hardening - patched watchdog + dockerman + external probes
+      # 2026-08-17: replace BaseHTTPMiddleware with pure ASGI middleware for SSE stability
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/http_routes.py:/install/lib/python3.12/site-packages/homelab_mcp/http_routes.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/webui.py:/install/lib/python3.12/site-packages/homelab_mcp/webui.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/watchdog.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/watchdog.py:ro
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/dockerman.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/dockerman.py:ro
+      # v0.9.13 hermes — Docker registry auth for auto-update pulls
+      - /root/.docker/config.json:/root/.docker/config.json:ro
+    environment:
+      HOMELAB_MCP_HOSTS: ${HOMELAB_MCP_HOSTS:-["truenas","unraid","racknerd1","racknerd2"]}
+      HOMELAB_MCP_PORT: ${HOMELAB_MCP_PORT:-18790}
+      HOMELAB_MCP_SSH_CONFIG: ${HOMELAB_MCP_SSH_CONFIG:-/data/.ssh/config}
+      HOMELAB_MCP_STATE_DIR: /data
+      HOMELAB_MCP_POLL_ENABLED: ${HOMELAB_MCP_POLL_ENABLED:-true}
+      HOMELAB_MCP_POLL_INTERVAL: ${HOMELAB_MCP_POLL_INTERVAL:-21600}
+      HOMELAB_MCP_NTFY_URL: ${HOMELAB_MCP_NTFY_URL:-https://ntfy.sh/}
+      HOMELAB_MCP_NTFY_TOPIC: ${HOMELAB_MCP_NTFY_TOPIC:-}
+      HOMELAB_MCP_NTFY_PRIORITY: ${HOMELAB_MCP_NTFY_PRIORITY:-default}
+      HOMELAB_MCP_LLM_ENDPOINT: ${HOMELAB_MCP_LLM_ENDPOINT:-http://localhost:11434/v1/chat/completions}
+      HOMELAB_MCP_LLM_API_KEY: ${HOMELAB_MCP_LLM_API_KEY:-}
+      HOMELAB_MCP_LLM_MODEL: ${HOMELAB_MCP_LLM_MODEL:-}
+      HOMELAB_MCP_LLM_TIMEOUT: ${HOMELAB_MCP_LLM_TIMEOUT:-30}
+      HOMELAB_MCP_GITHUB_TOKEN: ${HOMELAB_MCP_GITHUB_TOKEN:-}
+      HOMELAB_MCP_AUTO_APPLY_POLICY: ${HOMELAB_MCP_AUTO_APPLY_POLICY:-safe-and-caution}
+      HOMELAB_MCP_AUTO_APPLY_PIPELINE: ${HOMELAB_MCP_AUTO_APPLY_PIPELINE:-smart}
+      HOMELAB_MCP_AUTO_APPLY_IGNORE: ${HOMELAB_MCP_AUTO_APPLY_IGNORE:-}
+      HOMELAB_MCP_WATCHDOG_ENABLED: ${HOMELAB_MCP_WATCHDOG_ENABLED:-0}
+      HOMELAB_MCP_WATCHDOG_TIMEOUT_S: ${HOMELAB_MCP_WATCHDOG_TIMEOUT_S:-900}
+      HOMELAB_MCP_WATCHDOG_POLL_INTERVAL_S: ${HOMELAB_MCP_WATCHDOG_POLL_INTERVAL_S:-5}
+      HOMELAB_MCP_LOCAL_HOST_ALIAS: ${HOMELAB_MCP_LOCAL_HOST_ALIAS:-truenas}
+      HOMELAB_MCP_DOCKGE_STACKS_ROOT: ${HOMELAB_MCP_DOCKGE_STACKS_ROOT:-/mnt/Data/appdata/dockge/stacks}
+      HOMELAB_MCP_IX_APPS_ROOT: ${HOMELAB_MCP_IX_APPS_ROOT:-/mnt/.ix-apps/app_configs}
+      HOMELAB_MCP_PROTECTED_STACKS: ${HOMELAB_MCP_PROTECTED_STACKS:-["hermes", "SearXNG"]}
+      HOMELAB_MCP_PRODUCTION_HOURS: ${HOMELAB_MCP_PRODUCTION_HOURS:-["00:00-05:00"]}
+      HOMELAB_MCP_PRODUCTION_HOURS_TIMEZONE: ${HOMELAB_MCP_PRODUCTION_HOURS_TIMEZONE:-America/Los_Angeles}
+      HOMELAB_MCP_PLEX_TOKEN: ${HOMELAB_MCP_PLEX_TOKEN:-}
+      HOMELAB_MCP_SONARR_API_KEY: ${HOMELAB_MCP_SONARR_API_KEY:-}
+      HOMELAB_MCP_RADARR_API_KEY: ${HOMELAB_MCP_RADARR_API_KEY:-}
+      HOMELAB_MCP_LIDARR_API_KEY: ${HOMELAB_MCP_LIDARR_API_KEY:-}
+      HOMELAB_MCP_READARR_API_KEY: ${HOMELAB_MCP_READARR_API_KEY:-}
+      # 2026-08-14: search integration (SearXNG + Ollama conduit / direct cloud)
+      HOMELAB_MCP_SEARXNG_URL: ${HOMELAB_MCP_SEARXNG_URL:-http://192.168.1.7:8080}
+      HOMELAB_MCP_SEARXNG_TIMEOUT: ${HOMELAB_MCP_SEARXNG_TIMEOUT:-10}
+      HOMELAB_MCP_SEARCH_DECOMPOSER_MODEL: ${HOMELAB_MCP_SEARCH_DECOMPOSER_MODEL:-qwen3.5:cloud}
+      HOMELAB_MCP_SEARCH_CURATOR_MODEL: ${HOMELAB_MCP_SEARCH_CURATOR_MODEL:-deepseek-v4-flash:cloud}
+      HOMELAB_MCP_SEARCH_LOCAL_MODEL: ${HOMELAB_MCP_SEARCH_LOCAL_MODEL:-qwen2.5:7b}
+      HOMELAB_MCP_SEARCH_MAX_RESULTS_PER_QUERY: ${HOMELAB_MCP_SEARCH_MAX_RESULTS_PER_QUERY:-10}
+      HOMELAB_MCP_SEARCH_MAX_FOLLOW_UPS: ${HOMELAB_MCP_SEARCH_MAX_FOLLOW_UPS:-3}
+      HOMELAB_MCP_SEARCH_EVIDENCE_BUDGET: ${HOMELAB_MCP_SEARCH_EVIDENCE_BUDGET:-80000}
+      HOMELAB_MCP_SEARCH_CACHE_TTL: ${HOMELAB_MCP_SEARCH_CACHE_TTL:-0}
+      HOMELAB_MCP_SEARCH_CACHE_BACKEND: ${HOMELAB_MCP_SEARCH_CACHE_BACKEND:-memory}
+      HOMELAB_MCP_OLLAMA_URL: ${HOMELAB_MCP_OLLAMA_URL:-http://127.0.0.1:11434}
+      HOMELAB_MCP_OLLAMA_CLOUD_URL: ${HOMELAB_MCP_OLLAMA_CLOUD_URL:-}
+      HOMELAB_MCP_OLLAMA_CLOUD_API_KEY: ${HOMELAB_MCP_OLLAMA_CLOUD_API_KEY:-}
+      HOMELAB_MCP_OLLAMA_CLIENT_TIMEOUT: ${HOMELAB_MCP_OLLAMA_CLIENT_TIMEOUT:-120}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://127.0.0.1:18790/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

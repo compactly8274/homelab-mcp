@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homelab_mcp.auto_apply_main import (
     parse_args,
@@ -43,6 +43,9 @@ class _FakeHost:
     def name(self) -> str:
         return self._name
 
+    async def list_containers(self, all: bool = True) -> list[dict]:
+        return []
+
 
 class _FakeState:
     def __init__(self, rows):
@@ -70,7 +73,7 @@ async def test_run_one_cycle_empty_db() -> None:
         fetch_release_notes=AsyncMock(),
         classify_release_notes=AsyncMock(),
         run_pipeline=AsyncMock(),
-        notifier=MagicMock(notify=AsyncMock()),
+        notifier=MagicMock(notify_breaking=AsyncMock(), notify_caution=AsyncMock()),
         compose_manager_root="/srv/ca",
         dockge_stacks_root="/srv/dockge",
     )
@@ -89,11 +92,14 @@ async def test_run_one_cycle_host_filter() -> None:
         def name(self) -> str:
             return "unraid"
 
+        async def list_containers(self, all: bool = True) -> list[dict]:
+            return [{"NAME": "x1", "PROJECT": "x1"}]
+
         async def inspect_container(self, name: str) -> dict:
             return {
                 "Config": {
                     "Image": "img:latest",
-                    "Labels": {"com.docker.compose.project": name},
+                    "Labels": {"com.docker.compose.project": "x1"},
                 },
             }
 
@@ -102,11 +108,14 @@ async def test_run_one_cycle_host_filter() -> None:
         def name(self) -> str:
             return "truenas"
 
+        async def list_containers(self, all: bool = True) -> list[dict]:
+            return [{"NAME": "x2", "PROJECT": "x2"}]
+
         async def inspect_container(self, name: str) -> dict:
             return {
                 "Config": {
                     "Image": "img:latest",
-                    "Labels": {"com.docker.compose.project": name},
+                    "Labels": {"com.docker.compose.project": "x2"},
                 },
             }
 
@@ -118,7 +127,7 @@ async def test_run_one_cycle_host_filter() -> None:
         fetch_release_notes=AsyncMock(return_value=None),
         classify_release_notes=AsyncMock(),
         run_pipeline=AsyncMock(),
-        notifier=MagicMock(notify=AsyncMock()),
+        notifier=MagicMock(notify_breaking=AsyncMock(), notify_caution=AsyncMock()),
         compose_manager_root="/srv/ca",
         dockge_stacks_root="/srv/dockge",
     )
@@ -139,6 +148,12 @@ async def test_run_one_cycle_per_row_exception_isolation() -> None:
         def name(self) -> str:
             return "unraid"
 
+        async def list_containers(self, all: bool = True) -> list[dict]:
+            return [
+                {"NAME": "x1", "PROJECT": "x1"},
+                {"NAME": "x2", "PROJECT": "x2"},
+            ]
+
         async def inspect_container(self, name: str) -> dict:
             return {
                 "Config": {
@@ -158,17 +173,18 @@ async def test_run_one_cycle_per_row_exception_isolation() -> None:
             raise RuntimeError("simulated failure on x1")
         return {"ok": True, "action": "applied"}
 
-    out = await run_one_cycle(
-        hosts=hosts, state=state,  # type: ignore[arg-type]
-        dry_run=False, host_filter=None,
-        per_row_timeout=10.0,
-        fetch_release_notes=AsyncMock(return_value=None),
-        classify_release_notes=AsyncMock(),
-        run_pipeline=_pipeline,
-        notifier=MagicMock(notify=AsyncMock()),
-        compose_manager_root="/srv/ca",
-        dockge_stacks_root="/srv/dockge",
-    )
+    with patch("homelab_mcp.updater.auto_apply._reconcile_in_progress_row", AsyncMock(return_value=None)):
+        out = await run_one_cycle(
+            hosts=hosts, state=state,  # type: ignore[arg-type]
+            dry_run=False, host_filter=None,
+            per_row_timeout=10.0,
+            fetch_release_notes=AsyncMock(return_value=None),
+            classify_release_notes=AsyncMock(),
+            run_pipeline=_pipeline,
+            notifier=MagicMock(notify_breaking=AsyncMock(), notify_caution=AsyncMock()),
+            compose_manager_root="/srv/ca",
+            dockge_stacks_root="/srv/dockge",
+        )
     assert call_count[0] == 2
     assert len(out) == 2
     # x1 failed, x2 succeeded and was dismissed

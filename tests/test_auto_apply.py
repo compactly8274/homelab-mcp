@@ -24,6 +24,11 @@ from homelab_mcp.updater.auto_apply import (
 from homelab_mcp.updater.release_notes import ReleaseNotes
 from homelab_mcp.updater.risk import RiskVerdict
 
+
+def _make_notifier():
+    return MagicMock(notify_breaking=AsyncMock(), notify_caution=AsyncMock())
+
+
 # -- resolve_stack_dir -----------------------------------------------------
 
 
@@ -103,13 +108,17 @@ def test_resolve_stack_dir_no_project_returns_none() -> None:
 
 
 class _FakeHost:
-    def __init__(self, name, inspect_data):
+    def __init__(self, name, inspect_data, containers=None):
         self._name = name
         self._inspect_data = inspect_data
+        self._containers = containers or []
 
     @property
     def name(self) -> str:
         return self._name
+
+    async def list_containers(self, all: bool = True) -> list[dict]:
+        return self._containers
 
     async def inspect_container(self, name: str) -> dict:
         return self._inspect_data
@@ -140,10 +149,9 @@ async def test_safe_verdict_is_applied() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": ["x@sha256:" + "b" * 64],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -155,7 +163,8 @@ async def test_safe_verdict_is_applied() -> None:
     pipeline.assert_awaited_once()
     assert pipeline.call_args.kwargs["stack"] == "radarr"
     assert pipeline.call_args.kwargs["to_digest"] == "sha256:" + "b" * 64
-    notifier.notify.assert_not_called()
+    notifier.notify_breaking.assert_not_called()
+    notifier.notify_caution.assert_not_called()
     # Regression guard: the pending row that triggered this apply
     # must be dismissed on success, otherwise the canary cron
     # would re-attempt the same apply every 6h. (This was the
@@ -180,10 +189,9 @@ async def test_caution_verdict_applied_under_default_policy() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -194,7 +202,8 @@ async def test_caution_verdict_applied_under_default_policy() -> None:
     )
     assert out["action"] == "applied"
     pipeline.assert_awaited_once()
-    notifier.notify.assert_not_called()
+    notifier.notify_breaking.assert_not_called()
+    notifier.notify_caution.assert_not_called()
     # Regression guard: same as test_safe_verdict_is_applied.
     remaining = await state.list_pending_updates(host="unraid")
     assert remaining == [], (
@@ -213,10 +222,9 @@ async def test_caution_verdict_notified_under_safe_only() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -227,7 +235,7 @@ async def test_caution_verdict_notified_under_safe_only() -> None:
     )
     assert out["action"] == "notified_caution"
     pipeline.assert_not_awaited()
-    notifier.notify.assert_awaited_once()
+    notifier.notify_caution.assert_awaited_once()
     # v0.9.12: notify-only paths must also dismiss the pending
     # row so the canary cron doesn't re-notify the same drift
     # every 6h. The user has been informed; a newer digest will
@@ -256,10 +264,9 @@ async def test_breaking_verdict_never_applies() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -272,7 +279,7 @@ async def test_breaking_verdict_never_applies() -> None:
     )
     assert out["action"] == "notified_breaking"
     pipeline.assert_not_awaited()
-    notifier.notify.assert_awaited_once()
+    notifier.notify_breaking.assert_awaited_once()
     # v0.9.12: see test_caution_verdict_notified_under_safe_only.
     remaining = await state.list_pending_updates(host="unraid")
     assert remaining == [], (
@@ -291,10 +298,9 @@ async def test_no_release_notes_treated_as_caution_default() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -323,10 +329,9 @@ async def test_no_release_notes_notified_under_safe_only() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock()
-    notifier = MagicMock()
-    notifier.notify = AsyncMock()
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -337,7 +342,7 @@ async def test_no_release_notes_notified_under_safe_only() -> None:
     )
     assert out["action"] == "notified_caution"
     pipeline.assert_not_awaited()
-    notifier.notify.assert_awaited_once()
+    notifier.notify_caution.assert_awaited_once()
     # v0.9.12: see test_caution_verdict_notified_under_safe_only.
     remaining = await state.list_pending_updates(host="unraid")
     assert remaining == [], (
@@ -356,7 +361,7 @@ async def test_classifier_raising_falls_back_to_caution() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
 
     async def _raise(**kw):
@@ -366,7 +371,7 @@ async def test_classifier_raising_falls_back_to_caution() -> None:
         host=host, state=state, inputs=_make_inputs(),
         fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v1", source="github_release")),
         classify_release_notes=_raise,
-        run_pipeline=pipeline, notifier=MagicMock(notify=AsyncMock()),
+        run_pipeline=pipeline, notifier=_make_notifier(),
     )
     # classifier raised → CAUTION → apply under default
     assert out["action"] == "applied"
@@ -391,14 +396,14 @@ async def test_apply_failure_returns_action_failed() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     async def _boom(*a, **kw):
         raise RuntimeError("docker daemon down")
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
         fetch_release_notes=AsyncMock(return_value=ReleaseNotes(text="x", tag="v1", source="github_release")),
         classify_release_notes=AsyncMock(return_value=RiskVerdict(risk="SAFE", summary="ok")),
-        run_pipeline=_boom, notifier=MagicMock(notify=AsyncMock()),
+        run_pipeline=_boom, notifier=_make_notifier(),
     )
     assert out["action"] == "failed"
     # v0.9.12: row must still be there so the canary can retry.
@@ -428,7 +433,7 @@ async def test_dry_run_safe_returns_would_apply_true() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": ["x@sha256:" + "b" * 64],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True, "action": "applied"})
     notifier = MagicMock(notify=AsyncMock())
 
@@ -444,7 +449,8 @@ async def test_dry_run_safe_returns_would_apply_true() -> None:
     assert out["dry_run"] is True
     assert out["verdict"]["risk"] == "SAFE"
     pipeline.assert_not_called()
-    notifier.notify.assert_not_called()
+    notifier.notify_breaking.assert_not_called()
+    notifier.notify_caution.assert_not_called()
 
 
 async def test_dry_run_caution_under_default_would_apply_true() -> None:
@@ -457,9 +463,9 @@ async def test_dry_run_caution_under_default_would_apply_true() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True})
-    notifier = MagicMock(notify=AsyncMock())
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -485,9 +491,9 @@ async def test_dry_run_caution_under_safe_only_would_apply_false() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True})
-    notifier = MagicMock(notify=AsyncMock())
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -514,9 +520,9 @@ async def test_dry_run_breaking_short_circuits_before_notify() -> None:
             "Labels": {"com.docker.compose.project": "radarr"},
         },
         "RepoDigests": [],
-    })
+    }, containers=[{"NAME": "radarr", "PROJECT": "radarr"}])
     pipeline = AsyncMock(return_value={"ok": True})
-    notifier = MagicMock(notify=AsyncMock())
+    notifier = _make_notifier()
 
     out = await evaluate_and_act(
         host=host, state=state, inputs=_make_inputs(),
@@ -530,4 +536,5 @@ async def test_dry_run_breaking_short_circuits_before_notify() -> None:
     assert out["would_apply"] is False
     assert out["verdict"]["risk"] == "BREAKING"
     pipeline.assert_not_called()
-    notifier.notify.assert_not_called()
+    notifier.notify_breaking.assert_not_called()
+    notifier.notify_caution.assert_not_called()

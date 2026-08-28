@@ -55,3 +55,14 @@ class HostClient(Protocol):
     async def run_command(
         self, command: str, timeout: float = 30.0
     ) -> CommandResult: ...
+
+    async def exec_in_container(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        workdir: str | None = None,
+        user: str | None = None,
+    ) -> CommandResult: ...

@@ -38,8 +38,11 @@ class RiskVerdict:
         risk:             one of "SAFE" / "CAUTION" / "BREAKING"
         summary:          one-line description
         migration_steps:  list of human actions required after the update
+                          (free-text, kept for backwards compat)
         compose_changes:  list of compose.yaml edits required
         env_changes:      list of env-var additions/removals
+        structured_steps: list of executable migration step dicts (Phase 3+).
+                          See _SYSTEM_PROMPT for the schema.
     """
 
     risk: str
@@ -47,6 +50,7 @@ class RiskVerdict:
     migration_steps: list[str] = field(default_factory=list)
     compose_changes: list[str] = field(default_factory=list)
     env_changes: list[str] = field(default_factory=list)
+    structured_steps: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Normalize the risk string to one of the three valid buckets.
@@ -58,12 +62,19 @@ class RiskVerdict:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RiskVerdict:
         """Build a verdict, coercing unknown risk strings to CAUTION."""
+        raw_structured = d.get("structured_steps") or []
+        structured: list[dict[str, Any]] = []
+        if isinstance(raw_structured, list):
+            for entry in raw_structured:
+                if isinstance(entry, dict):
+                    structured.append(dict(entry))
         return cls(
             risk=_coerce_risk(d.get("risk")),
             summary=str(d.get("summary") or "").strip(),
             migration_steps=_coerce_str_list(d.get("migration_steps")),
             compose_changes=_coerce_str_list(d.get("compose_changes")),
             env_changes=_coerce_str_list(d.get("env_changes")),
+            structured_steps=structured,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,6 +84,7 @@ class RiskVerdict:
             "migration_steps": self.migration_steps,
             "compose_changes": self.compose_changes,
             "env_changes": self.env_changes,
+            "structured_steps": self.structured_steps,
         }
 
 
@@ -151,7 +163,33 @@ _SYSTEM_PROMPT = (
     '  "migration_steps": list of human actions after the update (empty if SAFE)\n'
     '  "compose_changes": list of compose.yaml edits required (empty if none)\n'
     '  "env_changes":     list of env-var additions/removals (empty if none)\n'
-    "Do not include any commentary. JSON only."
+    '  "structured_steps": list of executable migration step dicts, ONLY when '
+    "BREAKING and only for actions the executor can run automatically. "
+    "Schema (one step per list entry):\n"
+    '    {\n'
+    '      "kind":            "command" | "docker_exec" | "write_file" | "read_only",\n'
+    '      "target":          "<hostname/container/absolute path>",\n'
+    '      "command":         "<shell command for command/docker_exec/read_only>",\n'
+    '      "path":            "<absolute path for write_file>",\n'
+    '      "content":         "<new file content for write_file>",\n'
+    '      "idempotency_key": "<short unique key, e.g. \\"pg_dump_backup\\" >",\n'
+    '      "confirmed":       true | false,\n'
+    '      "timeout_s":       300\n'
+    '    }\n'
+    "Kind semantics:\n"
+    '  - "command"     : arbitrary shell command on the target host (e.g. "pg_dump ..." via a sidecar, or "systemctl ...")\n'
+    '  - "docker_exec" : runs in a running container; ``target`` is the container name, ``command`` is the shell to run inside it\n'
+    '  - "write_file"  : overwrite a config file on the target host; ``path`` is the absolute file path, ``content`` is the new content\n'
+    '  - "read_only"   : verify a precondition (does not mutate); ``command`` is the check\n'
+    "Safety constraints (executor has hard refusals — these will be REJECTED):\n"
+    "  - NEVER emit commands matching: rm -rf /, mkfs, dd of=/dev/, shred, fork bombs, curl|sh, wget|sh, "
+    "chmod 777 /, chown root /, fdisk, parted, iptables -F, nft flush ruleset, "
+    "systemctl disable/mask/stop sshd, poweroff, shutdown, reboot, halt.\n"
+    "  - write_file paths must be under /etc/, /opt/, /var/lib/, /mnt/, or /boot/config/. Other paths are refused.\n"
+    "  - Set ``confirmed: true`` ONLY for steps the operator has explicitly approved in the release notes "
+    "(e.g. 'drop and recreate the database' — usually false). Default to false.\n"
+    "  - For SAFE and CAUTION, omit structured_steps entirely (use empty list).\n"
+    "Do not include any commentary outside the JSON object. JSON only."
 )
 
 
@@ -185,6 +223,9 @@ async def classify_release_notes(
         ],
         "temperature": 0.0,
         "max_tokens": 600,
+        # Keep the model loaded indefinitely so the next cron row doesn't
+        # pay the cold-load penalty (Ollama unloads by default after 5 min).
+        "keep_alive": -1,
         # Ollama ignores response_format; OpenAI requires it.
         "response_format": {"type": "json_object"},
     }

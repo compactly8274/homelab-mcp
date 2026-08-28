@@ -230,6 +230,41 @@ class LocalDocker:
             return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
         return CommandResult(0, "", "", int((time.monotonic() - t0) * 1000))
 
+    async def exec_in_container(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        workdir: str | None = None,
+        user: str | None = None,
+    ) -> CommandResult:
+        try:
+            c = self._ensure_client().containers.get(name)
+        except NotFound as e:
+            return CommandResult(2, "", f"container not found: {e}", 0)
+        t0 = time.monotonic()
+        try:
+            # exec_run returns (exit_code, output) where output is a generator
+            # for demux=True or bytes for demux=False.
+            exit_code, output = c.exec_run(
+                command,
+                environment=env or {},
+                workdir=workdir,
+                user=user,
+                demux=False,
+                tty=False,
+            )
+            stdout = (output or b"").decode("utf-8", errors="replace")
+            stderr = ""
+        except APIError as e:
+            return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
+        return CommandResult(
+            exit_code or 0, stdout, stderr,
+            int((time.monotonic() - t0) * 1000),
+        )
+
     async def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
         t0 = time.monotonic()
         try:
