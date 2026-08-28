@@ -11,6 +11,18 @@ from homelab_mcp.tools.preflight import preflight_check_tool
 _MAX_TIMEOUT_S = 300.0
 _RESTORE_STAGING_DIR = "/tmp"
 
+_RESTORE_SCRIPT = r"""
+import sqlite3, sys
+db_path = sys.argv[1]
+sql_path = sys.argv[2]
+with open(sql_path, "r", encoding="utf-8") as f:
+    sql = f.read()
+con = sqlite3.connect(db_path)
+con.executescript(sql)
+con.commit()
+con.close()
+"""
+
 
 def _normalize_error(e: Any) -> str:
     if isinstance(e, list):
@@ -42,9 +54,9 @@ async def db_restore_tool(
 ) -> dict[str, Any]:
     """Restore a SQLite database from a host snapshot into a container.
 
-    The snapshot SQL is copied into the container and applied with
-    ``sqlite3 <db_path> ".read /tmp/...sql"``. The container's original
-    database file is left in place but overwritten by the restore SQL.
+    The snapshot SQL is applied with Python's stdlib ``sqlite3`` module
+    inside the container, so no ``sqlite3`` CLI binary is required. The
+    original database file is left in place but overwritten by the restore SQL.
     """
     if not all([host, container, db_path, snapshot_path]):
         return {"ok": False, "error": "host, container, db_path, and snapshot_path are required"}
@@ -73,11 +85,14 @@ async def db_restore_tool(
     if h is None:
         return {"ok": False, "preflight": preflight, "error": f"unknown host: {host}"}
 
-    read_r = await h.read_file(snapshot_path)
-    if not read_r.ok:
-        return {"ok": False, "preflight": preflight, "error": f"failed to read snapshot: {read_r.stderr}"}
+    sql = await h.read_file(snapshot_path)
+    if not isinstance(sql, str) or sql.startswith("ERROR:"):
+        return {
+            "ok": False,
+            "preflight": preflight,
+            "error": f"failed to read snapshot: {sql}" if isinstance(sql, str) else "failed to read snapshot",
+        }
 
-    sql = read_r.stdout
     if "PRAGMA" not in sql.upper() and "CREATE TABLE" not in sql.upper():
         return {
             "ok": False,
@@ -103,7 +118,7 @@ async def db_restore_tool(
         }
 
     try:
-        cmd = ["sqlite3", db_path, f".read {staging}"]
+        cmd = ["python3", "-c", _RESTORE_SCRIPT, db_path, staging]
         t0 = time.monotonic()
         r: CommandResult = await h.exec_in_container(container, cmd, timeout=timeout)
         return {
