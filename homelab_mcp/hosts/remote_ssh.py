@@ -396,3 +396,51 @@ class RemoteSSH:
     async def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
         return await self._run(command, timeout=timeout)
 
+
+
+    async def read_file(self, path: str) -> str:
+        """Read a file from the remote host filesystem."""
+        r = await self._run(f"cat {shlex.quote(path)}", timeout=30.0)
+        return r.stdout if r.ok else f"ERROR: {r.stderr}"
+
+    async def write_file(
+        self,
+        path: str,
+        content: str,
+        mode: str = "w",
+    ) -> CommandResult:
+        """Write content to a file on the remote host filesystem."""
+        t0 = time.monotonic()
+        if "b" in mode:
+            data = content if isinstance(content, bytes) else content.encode("utf-8")
+            encoded = data.hex()
+            cmd = (
+                f"mkdir -p $(dirname {shlex.quote(path)}) && "
+                f"printf '%s' {shlex.quote(encoded)} | xxd -r -p > {shlex.quote(path)}"
+            )
+        else:
+            cmd = (
+                f"mkdir -p $(dirname {shlex.quote(path)}) && "
+                f"cat > {shlex.quote(path)} <<'__HOMELAB_MCP_EOF__'\n"
+                f"{content}\n"
+                "__HOMELAB_MCP_EOF__"
+            )
+        r = await self._run(cmd, timeout=30.0)
+        return CommandResult(
+            r.exit_code,
+            r.stdout,
+            r.stderr,
+            int((time.monotonic() - t0) * 1000),
+        )
+
+    async def copy_to_container(
+        self,
+        name: str,
+        host_path: str,
+        container_path: str,
+    ) -> CommandResult:
+        """Copy a file from the remote host into a container."""
+        return await self._run(
+            f"docker cp {shlex.quote(host_path)} {shlex.quote(f'{name}:{container_path}')}",
+            timeout=60.0,
+        )
