@@ -9,6 +9,15 @@ from homelab_mcp.tools.preflight import preflight_check_tool
 
 _MAX_TIMEOUT_S = 300.0
 
+_DUMP_SCRIPT = r"""
+import sqlite3, sys
+db_path = sys.argv[1]
+con = sqlite3.connect(db_path)
+for line in con.iterdump():
+    print(line)
+con.close()
+"""
+
 
 def _normalize_error(e: Any) -> str:
     if isinstance(e, list):
@@ -40,8 +49,10 @@ async def db_snapshot_tool(
 ) -> dict[str, Any]:
     """Dump a SQLite database from a container to a host path.
 
-    The dump is produced by running ``sqlite3 <db_path> .dump`` inside the
-    container and writing the SQL text to ``snapshot_path`` on the host.
+    The dump is produced by running Python's stdlib ``sqlite3.iterdump()``
+    inside the container. The resulting SQL is compatible with the SQLite
+    CLI ``.read`` command and with ``sqlite3.Connection.executescript()`` so
+    it can be restored on any system with a SQLite-compatible engine.
     """
     if not all([host, container, db_path, snapshot_path]):
         return {"ok": False, "error": "host, container, db_path, and snapshot_path are required"}
@@ -70,7 +81,7 @@ async def db_snapshot_tool(
     if h is None:
         return {"ok": False, "preflight": preflight, "error": f"unknown host: {host}"}
 
-    cmd = ["sqlite3", db_path, ".dump"]
+    cmd = ["python3", "-c", _DUMP_SCRIPT, db_path]
     t0 = time.monotonic()
     r: CommandResult = await h.exec_in_container(container, cmd, timeout=timeout)
     if not r.ok:
@@ -80,8 +91,17 @@ async def db_snapshot_tool(
             "exit_code": r.exit_code,
             "stdout": r.stdout,
             "stderr": r.stderr,
-            "error": f"sqlite3 .dump failed: {r.stderr.strip() or 'unknown error'}",
+            "error": f"sqlite3 dump failed: {r.stderr.strip() or 'unknown error'}",
             "duration_ms": r.duration_ms,
+        }
+
+    # Basic sanity check: iterdump should emit CREATE TABLE statements.
+    if "CREATE TABLE" not in r.stdout.upper():
+        return {
+            "ok": False,
+            "preflight": preflight,
+            "error": "snapshot does not look like a valid SQLite dump",
+            "duration_ms": int((time.monotonic() - t0) * 1000),
         }
 
     write_r = await h.write_file(snapshot_path, r.stdout)
