@@ -131,7 +131,7 @@ async def preflight_check_tool(
         }
     """
     action = action.lower()
-    valid = {"remove", "stop", "restart", "apply_update", "dismiss_pending", "exec_in_container"}
+    valid = {"remove", "stop", "restart", "apply_update", "dismiss_pending", "exec_in_container", "http_probe", "db_snapshot", "db_restore"}
     if action not in valid:
         return {
             "safe": False,
@@ -236,11 +236,11 @@ async def preflight_check_tool(
         # be running. We don't exec into a restarting or broken container
         # because the diagnostic results are unreliable and the container
         # runtime may reject exec anyway.
-        if action == "exec_in_container":
+        if action in ("exec_in_container", "db_snapshot", "db_restore"):
             if status not in ("running",):
                 blockers.append(
                     f"{name} is not running (status={status!r}). "
-                    f"Refusing to exec into a non-running container."
+                    f"Refusing to run a container-bound benchmark tool on a non-running container."
                 )
                 if not alt:
                     alt = f"Check stack_status_tool({host!r}, {stack!r}) and restart the container if appropriate."
@@ -248,11 +248,11 @@ async def preflight_check_tool(
                 warnings.append(
                     f"{name} is in a restart loop "
                     f"(restart_count={restart_count}, status={status!r}). "
-                    f"Exec may race with the restart; fix the root cause first."
+                    f"Benchmark exec may race with the restart; fix the root cause first."
                 )
             if _started_recently(ins):
                 warnings.append(
-                    f"{name} started recently; exec into a container still "
+                    f"{name} started recently; benchmarking a container still "
                     f"in its init phase may return misleading diagnostics."
                 )
 

@@ -287,6 +287,45 @@ class LocalDocker:
         )
 
 
+
+    async def read_file(self, path: str) -> str:
+        """Read a file from the local host filesystem."""
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    async def write_file(
+        self,
+        path: str,
+        content: str,
+        mode: str = "w",
+    ) -> CommandResult:
+        """Write content to a file on the local host filesystem."""
+        t0 = time.monotonic()
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if "b" in mode:
+                p.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+            else:
+                p.write_text(content, encoding="utf-8")
+            return CommandResult(0, "", "", int((time.monotonic() - t0) * 1000))
+        except Exception as e:
+            return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
+
+    async def copy_to_container(
+        self,
+        name: str,
+        host_path: str,
+        container_path: str,
+    ) -> CommandResult:
+        """Copy a file from the local host into a container."""
+        return await self.run_command(
+            f"docker cp {shlex.quote(host_path)} {shlex.quote(f'{name}:{container_path}')}",
+            timeout=60.0,
+        )
+
 async def _run_compose(stack_dir: str, args: list[str], timeout: int = 300) -> CommandResult:
     """Run a ``docker compose ...`` command in the given directory."""
     if not Path(stack_dir).is_dir():

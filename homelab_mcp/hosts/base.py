@@ -66,3 +66,19 @@ class HostClient(Protocol):
         workdir: str | None = None,
         user: str | None = None,
     ) -> CommandResult: ...
+
+    async def read_file(self, path: str) -> str: ...
+
+    async def write_file(
+        self,
+        path: str,
+        content: str,
+        mode: str = "w",
+    ) -> CommandResult: ...
+
+    async def copy_to_container(
+        self,
+        name: str,
+        host_path: str,
+        container_path: str,
+    ) -> CommandResult: ...

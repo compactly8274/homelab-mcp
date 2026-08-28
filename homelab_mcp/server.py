@@ -90,8 +90,11 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.dashboard
     import homelab_mcp.tools.dismiss_all_pending
     import homelab_mcp.tools.events
+    import homelab_mcp.tools.db_restore
+    import homelab_mcp.tools.db_snapshot
     import homelab_mcp.tools.exec_in_container
     import homelab_mcp.tools.get_update_history
+    import homelab_mcp.tools.http_probe
     import homelab_mcp.tools.health
     import homelab_mcp.tools.memory
     import homelab_mcp.tools.notifier_status
