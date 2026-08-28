@@ -11,13 +11,10 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from homelab_mcp.tools.exec_in_container import (
     _is_allowlisted,
     exec_in_container_tool,
 )
-
 
 # --- allowlist unit tests ---------------------------------------------------
 

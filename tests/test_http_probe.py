@@ -11,8 +11,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from homelab_mcp.tools.http_probe import http_probe_tool
 
 

@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from homelab_mcp.tools.db_restore import db_restore_tool
 from homelab_mcp.tools.db_snapshot import db_snapshot_tool
 

@@ -48,13 +48,19 @@ async def http_probe_tool(
         "%{content_type}\t%{url_effective}\t%{redirect_url}\n"
     )
 
-    cmd_tokens = (
-        ["curl", "-sS", *output_flag, "-m", f"{timeout:.1f}", "-w", fmt]
-        + redirect_flag
-        + method_flag
-        + header_args
-        + [url]
-    )
+    cmd_tokens = [
+        "curl",
+        "-sS",
+        *output_flag,
+        "-m",
+        f"{timeout:.1f}",
+        "-w",
+        fmt,
+        *redirect_flag,
+        *method_flag,
+        *header_args,
+        url,
+    ]
     # Build a shell string with proper quoting. run_command splits via shlex.
     cmd = " ".join(_quote(t) for t in cmd_tokens)
 
