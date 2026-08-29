@@ -101,6 +101,79 @@ def _timeout_for_stack(stack_dir: str) -> float:
 _SSH_QUIET = True  # suppress banner / motd in stdout
 
 
+def _parse_remote_stats_line(line: str) -> dict[str, Any] | None:
+    """Parse one line of ``docker stats --no-stream --format json`` output."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        raw = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    def _parse_bytes(value: str) -> int:
+        value = value.strip()
+        if not value or value == "0B":
+            return 0
+        units = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4,
+                 "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
+        num = ""
+        unit = ""
+        for ch in value:
+            if ch.isdigit() or ch == ".":
+                num += ch
+            else:
+                unit += ch
+        try:
+            mult = units.get(unit.strip(), 1)
+            return int(float(num) * mult) if num else 0
+        except ValueError:
+            return 0
+
+    def _parse_pair(value: str, keys: tuple[str, str]) -> dict[str, int]:
+        parts = [p.strip() for p in value.split("/")]
+        return {
+            keys[0]: _parse_bytes(parts[0]) if parts else 0,
+            keys[1]: _parse_bytes(parts[1]) if len(parts) > 1 else 0,
+        }
+
+    cpu_str = raw.get("CPUPerc", "0%").replace("%", "").strip()
+    try:
+        cpu_pct = float(cpu_str) if cpu_str else 0.0
+    except ValueError:
+        cpu_pct = 0.0
+
+    mem_str = raw.get("MemPerc", "0%").replace("%", "").strip()
+    try:
+        mem_pct = float(mem_str) if mem_str else 0.0
+    except ValueError:
+        mem_pct = 0.0
+
+    mem_usage = raw.get("MemUsage", "")
+    mem_parts = mem_usage.split("/")
+    mem_usage_bytes = _parse_bytes(mem_parts[0]) if mem_parts else 0
+    mem_limit_bytes = _parse_bytes(mem_parts[1]) if len(mem_parts) > 1 else 1
+
+    pids_str = raw.get("PIDs", "0").strip()
+    try:
+        pids = int(pids_str) if pids_str else 0
+    except ValueError:
+        pids = 0
+
+    return {
+        "cpu_percent": round(cpu_pct, 2),
+        "memory": {
+            "usage_bytes": mem_usage_bytes,
+            "limit_bytes": mem_limit_bytes,
+            "usage_percent": round(mem_pct, 2),
+        },
+        "network": _parse_pair(raw.get("NetIO", ""), ("rx_bytes", "tx_bytes")),
+        "block_io": _parse_pair(raw.get("BlockIO", ""), ("read_bytes", "write_bytes")),
+        "pids": pids,
+        "raw": raw,
+    }
+
+
 class RemoteSSH:
     """A host backend that runs docker commands over SSH.
 
@@ -432,6 +505,42 @@ class RemoteSSH:
             r.stderr,
             int((time.monotonic() - t0) * 1000),
         )
+
+    async def container_metrics(
+        self,
+        name: str | None = None,
+        *,
+        sample_seconds: float = 1.0,
+    ) -> dict[str, Any]:
+        """Return point-in-time metrics for one or all containers over SSH.
+
+        Runs ``docker stats --no-stream --format json`` on the remote host
+        and normalizes the JSON lines to the same shape as
+        :meth:`LocalDocker.container_metrics`.
+        """
+        if name:
+            cmd = f"docker stats --no-stream --format json {shlex.quote(name)}"
+        else:
+            cmd = "docker stats --no-stream --format json"
+        r = await self._run(cmd, timeout=60.0)
+        if not r.ok:
+            return {"error": r.stderr or "docker stats failed", "host": self._name}
+
+        result = {"host": self._name, "containers": {}, "sample_seconds": sample_seconds}
+        for line in r.stdout.splitlines():
+            parsed = _parse_remote_stats_line(line)
+            if parsed is None:
+                continue
+            cname = parsed.get("raw", {}).get("Name", "")
+            if not cname:
+                cname = parsed.get("raw", {}).get("Container", "")
+            if not cname:
+                cname = "unknown"
+            result["containers"][cname] = parsed
+
+        if name and name not in result["containers"]:
+            return {"error": f"container {name!r} not found on host {self._name}", "host": self._name}
+        return result
 
     async def copy_to_container(
         self,
