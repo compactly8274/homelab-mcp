@@ -60,6 +60,8 @@ services:
       - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/db_restore.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/db_restore.py:ro
       # Benchmark framework Phase 3 file-level mounts:
       - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/container_metrics.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/container_metrics.py:ro
+      # Benchmark framework Phase 4 file-level mounts:
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/benchmark_load.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/benchmark_load.py:ro
       # v0.9.14-hermes-2: smart_apply.py dry-run dismissal fix
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/smart_apply.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/smart_apply.py:ro
       # 2026-08-13: readarr replaced by bookrec on Unraid; skip unconfigured readarr in *arr bulk tools

@@ -6,9 +6,10 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
-## [Unreleased] — benchmark framework Phase 1 + 2 + 3 + Tavily search
+## [Unreleased] — benchmark framework Phase 1 + 2 + 3 + 4 + Tavily search
 
 ### Added
+- `benchmark_load_tool` — HTTP request burst with latency percentiles and throughput (Phase 4).
 - `exec_in_container_tool` — run allowlisted commands inside a container,
   with preflight gate and command allowlist (blocks `rm`, shells, package
   managers, and other destructive tools by default).

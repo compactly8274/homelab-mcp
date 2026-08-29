@@ -63,6 +63,7 @@ Use the WebUI/Claude to call:
   snapshot_path="/data/backups/prowlarr-test.sql")` → restores.
 - `container_metrics_tool(host="truenas", container="prowlarr")` → returns CPU/mem/net/block-IO stats.
 - `tavily_search(query="what is docker compose")` → returns Tavily results when `HOMELAB_MCP_TAVILY_API_KEY` is set, otherwise a clear error.
+- `benchmark_load_tool(url="http://prowlarr:9696", requests=50, concurrency=5)` → runs a short HTTP burst and returns latency percentiles + throughput.
 
 ## Rollback
 If anything looks wrong, run:
