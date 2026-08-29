@@ -1,6 +1,7 @@
-# Deploy benchmark framework (Phases 1 + 2)
+# Deploy benchmark framework (Phases 1 + 2 + 3)
 
 ## What this branch changes
+* Phase 3: `container_metrics_tool` for point-in-time Docker stats on any host.
 - Adds `exec_in_container_tool` with a strict command allowlist and real preflight gate.
 - Adds `http_probe_tool` for curl-based health/endpoint checks inside the container network.
 - Adds `db_snapshot_tool` / `db_restore_tool` using Python's stdlib `sqlite3` inside containers.
@@ -60,6 +61,7 @@ Use the WebUI/Claude to call:
   snapshot_path="/data/backups/prowlarr-test.sql")` → creates snapshot.
 - `db_restore_tool(..., db_path="/config/prowlarr-restored.db",
   snapshot_path="/data/backups/prowlarr-test.sql")` → restores.
+- `container_metrics_tool(host="truenas", container="prowlarr")` → returns CPU/mem/net/block-IO stats.
 
 ## Rollback
 If anything looks wrong, run:
