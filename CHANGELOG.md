@@ -6,7 +6,7 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
-## [Unreleased] — benchmark framework Phase 1 + 2
+## [Unreleased] — benchmark framework Phase 1 + 2 + 3 + Tavily search
 
 ### Added
 - `exec_in_container_tool` — run allowlisted commands inside a container,
@@ -17,6 +17,8 @@ commit messages; this file is the human-readable summary.
 - `db_snapshot_tool` / `db_restore_tool` — SQLite backup and restore via
   Python's stdlib `sqlite3`, so no `sqlite3` CLI binary is required in the
   target image. Restore builds a temp file and atomically swaps it into place.
+- `container_metrics_tool` — point-in-time Docker stats across hosts.
+- `tavily_search_tool` — Tavily-backed web search with SearXNG fallback.
 
 ### Fixed
 - `preflight_check_tool` now accepts `start` and `kill` as valid container
