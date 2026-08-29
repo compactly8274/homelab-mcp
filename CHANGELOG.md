@@ -6,6 +6,29 @@ image tags (e.g. `0.4.0`, not `v0.4.0`) in GHCR — see the
 process. Conventional Commits (feat/fix/chore) are used for
 commit messages; this file is the human-readable summary.
 
+## [Unreleased] — benchmark framework Phase 1 + 2
+
+### Added
+- `exec_in_container_tool` — run allowlisted commands inside a container,
+  with preflight gate and command allowlist (blocks `rm`, shells, package
+  managers, and other destructive tools by default).
+- `http_probe_tool` — HTTP connectivity probe from inside the container
+  network.
+- `db_snapshot_tool` / `db_restore_tool` — SQLite backup and restore via
+  Python's stdlib `sqlite3`, so no `sqlite3` CLI binary is required in the
+  target image. Restore builds a temp file and atomically swaps it into place.
+
+### Fixed
+- `preflight_check_tool` now accepts `start` and `kill` as valid container
+  actions (was rejecting them as invalid).
+- Production-hours default corrected to `00:00-05:00` America/Los_Angeles.
+- Deploy reference config switched from whole-package bind mounts to explicit
+  file-level mounts, so benchmark patches no longer shadow live hotfixes.
+
+### Docs
+- Added `deploy/DEPLOY.md` with step-by-step Phase 1 + 2 deployment and
+  rollback instructions.
+
 ## [0.9.12] — 2026-07-27
 
 ### Fixed
