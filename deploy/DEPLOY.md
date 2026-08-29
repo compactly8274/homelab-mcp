@@ -68,12 +68,30 @@ Use the WebUI/Claude to call:
 - `benchmark_restart_tool(host="truenas", target="prowlarr", probe_url="http://prowlarr:9696")` → restart and measure settle time.
 - `benchmark_diff_tool(host="truenas", container="prowlarr", baseline_label="before-update")` → compare current state to baseline.
 
+## Deploy
+Run this **only during 00:00-05:00 America/Los_Angeles**:
+```bash
+bash /mnt/Data/appdata/homelab-mcp/src/deploy/deploy-benchmark-phase6.sh
+```
+The script:
+1. Verifies the production-hours window.
+2. Backs up the current `compose.yaml`.
+3. Adds the Phase 4-6 file-level mounts (`benchmark_load.py`, `benchmark_restart.py`, `benchmark_diff.py`).
+4. Validates compose syntax.
+5. Recreates the `homelab-mcp` container.
+6. Waits for healthchecks to pass.
+7. Runs the benchmark tool tests inside the container.
+
+If healthchecks fail, it automatically invokes the rollback script.
+
 ## Rollback
 If anything looks wrong, run:
 ```bash
-bash /mnt/Data/appdata/homelab-mcp/src/deploy/rollback-benchmark.sh
+bash /mnt/Data/appdata/homelab-mcp/src/deploy/rollback-benchmark-phase6.sh
 ```
-This restores the pre-Phase-1 compose baseline and recreates the container.
+This restores the compose backup created by the deploy script and recreates the container.
+
+(The older `rollback-benchmark.sh` restores the pre-mesh baseline and is kept for historical reference only.)
 
 ## Do not ship until
 - This deployment has been exercised once successfully, or
