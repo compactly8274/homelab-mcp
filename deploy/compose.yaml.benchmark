@@ -60,6 +60,8 @@ services:
       - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/db_restore.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/db_restore.py:ro
       # Benchmark framework Phase 3 file-level mounts:
       - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/container_metrics.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/container_metrics.py:ro
+      # 2026-08-29: add Tavily as primary search provider with SearXNG fallback
+      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/tavily.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/tavily.py:ro
       # v0.9.14-hermes-2: smart_apply.py dry-run dismissal fix
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/smart_apply.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/smart_apply.py:ro
       # 2026-08-13: readarr replaced by bookrec on Unraid; skip unconfigured readarr in *arr bulk tools
@@ -104,6 +106,7 @@ services:
       HOMELAB_MCP_PROTECTED_STACKS: ${HOMELAB_MCP_PROTECTED_STACKS:-["hermes", "SearXNG"]}
       HOMELAB_MCP_PRODUCTION_HOURS: ${HOMELAB_MCP_PRODUCTION_HOURS:-["00:00-05:00"]}
       HOMELAB_MCP_PRODUCTION_HOURS_TIMEZONE: ${HOMELAB_MCP_PRODUCTION_HOURS_TIMEZONE:-America/Los_Angeles}
+      HOMELAB_MCP_TAVILY_API_KEY: ${HOMELAB_MCP_TAVILY_API_KEY:-}
       HOMELAB_MCP_PLEX_TOKEN: ${HOMELAB_MCP_PLEX_TOKEN:-}
       HOMELAB_MCP_SONARR_API_KEY: ${HOMELAB_MCP_SONARR_API_KEY:-}
       HOMELAB_MCP_RADARR_API_KEY: ${HOMELAB_MCP_RADARR_API_KEY:-}
