@@ -1,7 +1,7 @@
 """Tests for db_snapshot_tool and db_restore_tool.
 
 Covers:
-- Snapshot dumps DB content to host path.
+- Snapshot dumps DB content to host path using Python's stdlib sqlite3.
 - Restore validates snapshot and writes it back into container.
 - Preflight gate integration for restore.
 - Snapshot requires approval (database read).
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homelab_mcp.tools.db_restore import db_restore_tool
-from homelab_mcp.tools.db_snapshot import db_snapshot_tool
+from homelab_mcp.tools.db_restore import _RESTORE_SCRIPT, db_restore_tool
+from homelab_mcp.tools.db_snapshot import _DUMP_SCRIPT, db_snapshot_tool
 
 
 @dataclass
@@ -62,11 +62,9 @@ async def test_snapshot_success() -> None:
     assert r["ok"] is True
     assert r["snapshot_size_bytes"] > 0
     assert r["preflight"]["safe"] is True
-    called = fake.exec_in_container.call_args_list
-    assert len(called) == 1
-    assert called[0][0][0] == "prowlarr"
-    assert called[0][0][1][:2] == ["python3", "-c"]
-    assert called[0][0][1][3] == "/data/db.sqlite"
+    fake.exec_in_container.assert_awaited_once_with(
+        "prowlarr", ["python3", "-c", _DUMP_SCRIPT, "/data/db.sqlite"], timeout=60.0
+    )
     fake.write_file.assert_awaited_once_with("/backups/db.sql", exec_result.stdout)
 
 
@@ -173,8 +171,9 @@ async def test_restore_success() -> None:
     assert called[0][0] == "prowlarr"
     assert called[0][1][0] == "python3"
     assert called[0][1][1] == "-c"
+    assert called[0][1][2] == _RESTORE_SCRIPT
     assert called[0][1][3] == "/data/db.sqlite"
-
+    assert called[0][1][4].startswith("/tmp/homelab-mcp-restore-")
 
 
 async def test_restore_rejects_invalid_snapshot() -> None:
