@@ -37,13 +37,17 @@ def _fake_host(name: str) -> Any:
     return h
 
 
+_SAMPLE_DUMP = "BEGIN TRANSACTION;\nPRAGMA foreign_keys=OFF;\nCREATE TABLE users (id INT);\nCOMMIT;\n"
+_EMPTY_DUMP = "BEGIN TRANSACTION;\nCOMMIT;\n"
+
+
 async def test_snapshot_success() -> None:
     from homelab_mcp import server
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
 
-    exec_result = _CmdResult(stdout="PRAGMA foreign_keys=OFF;\nCREATE TABLE users (id INT);\n")
+    exec_result = _CmdResult(stdout=_SAMPLE_DUMP)
     fake.exec_in_container = AsyncMock(return_value=exec_result)
 
     write_result = _CmdResult()
@@ -62,6 +66,26 @@ async def test_snapshot_success() -> None:
         "prowlarr", ["python3", "-c", _DUMP_SCRIPT, "/data/db.sqlite"], timeout=60.0
     )
     fake.write_file.assert_awaited_once_with("/backups/db.sql", exec_result.stdout)
+
+
+async def test_snapshot_success_empty_db() -> None:
+    """An empty database (or FTS-only schema) still produces a valid dump."""
+    from homelab_mcp import server
+
+    fake = _fake_host("truenas")
+    server._host_clients = {"truenas": fake}
+
+    exec_result = _CmdResult(stdout=_EMPTY_DUMP)
+    fake.exec_in_container = AsyncMock(return_value=exec_result)
+    fake.write_file = AsyncMock(return_value=_CmdResult())
+
+    with patch("homelab_mcp.tools.db_snapshot.get_host", return_value=fake), patch(
+        "homelab_mcp.tools.db_snapshot.preflight_check_tool",
+        new=AsyncMock(return_value={"safe": True, "blockers": [], "warnings": []}),
+    ):
+        r = await db_snapshot_tool("truenas", "prowlarr", "/data/db.sqlite", "/backups/db.sql")
+
+    assert r["ok"] is True
 
 
 async def test_snapshot_preflight_blocked() -> None:
@@ -118,7 +142,7 @@ async def test_restore_success() -> None:
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
 
-    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE users (id INT);\n")
+    fake.read_file = AsyncMock(return_value=_SAMPLE_DUMP)
 
     write_result = _CmdResult()
     fake.write_file = AsyncMock(return_value=write_result)
@@ -176,7 +200,7 @@ async def test_restore_preflight_blocked() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\n")
+    fake.read_file = AsyncMock(return_value=_SAMPLE_DUMP)
 
     with patch("homelab_mcp.tools.db_restore.get_host", return_value=fake), patch(
         "homelab_mcp.tools.db_restore.preflight_check_tool",
@@ -196,7 +220,7 @@ async def test_restore_host_write_failure() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n")
+    fake.read_file = AsyncMock(return_value=_SAMPLE_DUMP)
 
     write_result = _CmdResult(ok=False, stderr="permission denied")
     fake.write_file = AsyncMock(return_value=write_result)
@@ -218,7 +242,7 @@ async def test_restore_container_copy_failure() -> None:
 
     fake = _fake_host("truenas")
     server._host_clients = {"truenas": fake}
-    fake.read_file = AsyncMock(return_value="PRAGMA foreign_keys=OFF;\nCREATE TABLE t (id INT);\n")
+    fake.read_file = AsyncMock(return_value=_SAMPLE_DUMP)
 
     write_result = _CmdResult()
     fake.write_file = AsyncMock(return_value=write_result)
