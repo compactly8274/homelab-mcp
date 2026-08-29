@@ -39,6 +39,15 @@ more downstream Docker hosts (Unraid, QNAP, etc.) over SSH.
   - `GET /health` — `{status: "ok", uptime_seconds: N}`
   - `GET /status` — daemon info + state DB summary
 
+- **Benchmark framework** (diagnostic MCP tools, safe to call with `require_approval=True`):
+  - `exec_in_container_tool` — run a tightly allowlisted command inside any
+    container; `rm`, shells, and package managers are blocked by default.
+  - `http_probe_tool` — curl-style HTTP check from inside the container network.
+  - `db_snapshot_tool` / `db_restore_tool` — dump and restore SQLite databases
+    using Python's stdlib `sqlite3` (no `sqlite3` CLI required in the target
+    image). Restore builds a temp file and atomically swaps it into place, so
+    it works even over a live, existing schema.
+
 - **Auto-update pipeline** (cron-style; one cycle at a time):
   - **Fetch release notes** — image → GitHub repo heuristic
     (ghcr.io / quay.io / lscr.io/linuxserver → GitHub Releases API,
@@ -83,6 +92,11 @@ python -m homelab_mcp.auto_apply_main --dry-run
 > If `uv sync` puts the venv in a `venv/` directory instead of
 > `.venv/`, set `UV_PROJECT_ENVIRONMENT=.venv` once or use
 > `uv venv .venv && uv sync --extra dev` to force the location.
+
+## Deploying the benchmark framework
+
+See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for Phase 1 + 2 deployment,
+rollback, and snapshot-path conventions.
 
 ## Install on Unraid
 
