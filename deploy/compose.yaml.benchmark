@@ -70,7 +70,7 @@ services:
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/updater/pipeline.py:/install/lib/python3.12/site-packages/homelab_mcp/updater/pipeline.py:ro
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/searxng.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/searxng.py:ro
       # 2026-08-29: add Tavily as primary search provider with SearXNG fallback
-      - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/tools/tavily.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/tavily.py:ro
+      - /mnt/Data/appdata/homelab-mcp/src/homelab_mcp/tools/tavily.py:/install/lib/python3.12/site-packages/homelab_mcp/tools/tavily.py:ro
       # 2026-08-14: mesh hardening - patched watchdog + dockerman + external probes
       # 2026-08-17: replace BaseHTTPMiddleware with pure ASGI middleware for SSE stability
       - /mnt/Data/appdata/homelab-mcp/patches/homelab_mcp/http_routes.py:/install/lib/python3.12/site-packages/homelab_mcp/http_routes.py:ro
