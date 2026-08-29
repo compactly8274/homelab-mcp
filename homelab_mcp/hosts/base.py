@@ -82,3 +82,10 @@ class HostClient(Protocol):
         host_path: str,
         container_path: str,
     ) -> CommandResult: ...
+
+    async def container_metrics(
+        self,
+        name: str | None = None,
+        *,
+        sample_seconds: float = 1.0,
+    ) -> dict[str, Any]: ...

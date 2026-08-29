@@ -131,7 +131,7 @@ async def preflight_check_tool(
         }
     """
     action = action.lower()
-    valid = {"remove", "stop", "start", "restart", "kill", "apply_update", "dismiss_pending", "exec_in_container", "http_probe", "db_snapshot", "db_restore"}
+    valid = {"remove", "stop", "start", "restart", "kill", "apply_update", "dismiss_pending", "exec_in_container", "http_probe", "db_snapshot", "db_restore", "container_metrics"}
     if action not in valid:
         return {
             "safe": False,

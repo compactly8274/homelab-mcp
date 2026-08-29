@@ -314,6 +314,49 @@ class LocalDocker:
         except Exception as e:
             return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
 
+
+    async def container_metrics(
+        self,
+        name: str | None = None,
+        *,
+        sample_seconds: float = 1.0,
+    ) -> dict[str, Any]:
+        """Return point-in-time metrics for one or all containers.
+
+        Uses docker SDK ``stats(stream=False)`` and returns a normalized
+        dict keyed by container name. CPU usage is a percentage of host
+        cores. Memory fields include raw bytes and a usage percentage.
+        Network and block I/O counters are included for delta
+        calculations.
+
+        If ``name`` is given, only that container is returned (or an error
+        if missing); otherwise all running containers are returned. The
+        ``sample_seconds`` argument is accepted for protocol symmetry but
+        the SDK already samples internally, so no extra sleep is added.
+        """
+        try:
+            client = self._ensure_client()
+        except Exception as e:
+            return {"error": f"cannot reach docker: {e}", "host": self._name}
+
+        if name:
+            try:
+                c = client.containers.get(name)
+                targets = [c]
+            except NotFound:
+                return {"error": f"container {name!r} not found on host {self._name}", "host": self._name}
+        else:
+            targets = client.containers.list(all=False)
+
+        result = {"host": self._name, "containers": {}, "sample_seconds": sample_seconds}
+        for c in targets:
+            stats = c.stats(stream=False, decode=True)
+            if not isinstance(stats, dict):
+                stats = next(iter(stats), {}) if stats else {}
+            cname = (c.attrs.get("Name") or "").lstrip("/")
+            result["containers"][cname] = _normalize_docker_stats(stats)
+        return result
+
     async def copy_to_container(
         self,
         name: str,
@@ -325,6 +368,61 @@ class LocalDocker:
             f"docker cp {shlex.quote(host_path)} {shlex.quote(f'{name}:{container_path}')}",
             timeout=60.0,
         )
+
+def _normalize_docker_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    """Normalize docker SDK stats dict to a stable, JSON-safe shape."""
+    stats = _safe_json(stats)
+    cpu_stats = stats.get("cpu_stats") or {}
+    precpu_stats = stats.get("precpu_stats") or {}
+    memory_stats = stats.get("memory_stats") or {}
+
+    cpu_delta = (cpu_stats.get("cpu_usage", {}).get("total_usage", 0) or 0) - (precpu_stats.get("cpu_usage", {}).get("total_usage", 0) or 0)
+    system_delta = (cpu_stats.get("system_cpu_usage", 0) or 0) - (precpu_stats.get("system_cpu_usage", 0) or 0)
+    cpu_pct = 0.0
+    if system_delta > 0 and cpu_delta > 0:
+        cpu_count = len(cpu_stats.get("cpu_usage", {}).get("percpu_usage") or []) or (cpu_stats.get("online_cpus") or 0)
+        if not cpu_count:
+            cpu_count = 1
+        cpu_pct = (cpu_delta / system_delta) * cpu_count * 100.0
+
+    mem_usage = memory_stats.get("usage", 0) or 0
+    mem_limit = memory_stats.get("limit", 1) or 1
+    mem_pct = (mem_usage / mem_limit) * 100.0 if mem_limit else 0.0
+
+    networks = stats.get("networks") or {}
+    net_summary = {"rx_bytes": 0, "tx_bytes": 0}
+    for net in networks.values():
+        if isinstance(net, dict):
+            net_summary["rx_bytes"] += net.get("rx_bytes", 0) or 0
+            net_summary["tx_bytes"] += net.get("tx_bytes", 0) or 0
+
+    blkio = stats.get("blkio_stats") or {}
+    io_summary = {"read_bytes": 0, "write_bytes": 0, "read_ios": 0, "write_ios": 0}
+    for entry in blkio.get("io_service_bytes_recursive") or []:
+        if entry.get("op") == "read":
+            io_summary["read_bytes"] += entry.get("value", 0) or 0
+        elif entry.get("op") == "write":
+            io_summary["write_bytes"] += entry.get("value", 0) or 0
+    for entry in blkio.get("io_serviced_recursive") or []:
+        if entry.get("op") == "read":
+            io_summary["read_ios"] += entry.get("value", 0) or 0
+        elif entry.get("op") == "write":
+            io_summary["write_ios"] += entry.get("value", 0) or 0
+
+    return {
+        "cpu_percent": round(cpu_pct, 2),
+        "memory": {
+            "usage_bytes": mem_usage,
+            "limit_bytes": mem_limit,
+            "usage_percent": round(mem_pct, 2),
+        },
+        "network": net_summary,
+        "block_io": io_summary,
+        "pids": cpu_stats.get("throttling_data", {}).get("periods", 0) or 0,
+        "raw": stats,
+    }
+
+
 
 async def _run_compose(stack_dir: str, args: list[str], timeout: int = 300) -> CommandResult:
     """Run a ``docker compose ...`` command in the given directory."""

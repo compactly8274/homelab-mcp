@@ -87,6 +87,7 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.arr
     import homelab_mcp.tools.auto_heal
     import homelab_mcp.tools.container_action
+    import homelab_mcp.tools.container_metrics
     import homelab_mcp.tools.dashboard
     import homelab_mcp.tools.db_restore
     import homelab_mcp.tools.db_snapshot
