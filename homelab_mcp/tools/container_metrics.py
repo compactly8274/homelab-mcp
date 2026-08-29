@@ -22,14 +22,18 @@ async def container_metrics_tool(
     """Return CPU/memory/network/block-IO metrics for a container.
 
     If ``container`` is omitted, metrics for all running containers on the
-    host are returned. The underlying backend uses ``docker stats`` on both
+    host are returned and the preflight gate is skipped, since there is no
+    single container to validate against and this is a read-only,
+    host-wide query. The underlying backend uses ``docker stats`` on both
     LocalDocker and RemoteSSH hosts.
     """
-    preflight_result = await preflight.preflight_check_tool(
-        host=host, action="container_metrics", stack=container or ""
-    )
-    if not preflight_result.get("safe", False):
-        return {"ok": False, "preflight": preflight_result}
+    preflight_result: dict[str, Any] | None = None
+    if container:
+        preflight_result = await preflight.preflight_check_tool(
+            host=host, action="container_metrics", stack=container
+        )
+        if not preflight_result.get("safe", False):
+            return {"ok": False, "preflight": preflight_result}
 
     h = get_host(host)
     result = await h.container_metrics(name=container, sample_seconds=sample_seconds)

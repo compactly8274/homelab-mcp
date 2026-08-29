@@ -418,7 +418,7 @@ def _normalize_docker_stats(stats: dict[str, Any]) -> dict[str, Any]:
         },
         "network": net_summary,
         "block_io": io_summary,
-        "pids": cpu_stats.get("throttling_data", {}).get("periods", 0) or 0,
+        "pids": (stats.get("pids_stats") or {}).get("current", 0) or 0,
         "raw": stats,
     }
 
