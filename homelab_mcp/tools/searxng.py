@@ -336,7 +336,7 @@ _GENERAL_TECH_KEYWORDS = frozenset(
 # engine list now uses the currently healthy engines found during the deploy
 # sweep: yandex and reloado are the most reliable, with fynd and Bing as
 # noisier fallbacks so we never get zero results.
-_GENERAL_ENGINES = "bing,yandex,reloado,fynd,privacywall,wikipedia,wikidata"
+_GENERAL_ENGINES = "bing,yandex,reloado,fynd,wikipedia,wikidata"
 
 # Science engines that are usually fast and accurate on academic queries.
 # semantic scholar is excluded because the upstream SearXNG engine frequently
