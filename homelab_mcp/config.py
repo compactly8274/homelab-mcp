@@ -213,6 +213,9 @@ class Settings(BaseModel):
     ollama_cloud_url: str = ""
     ollama_cloud_api_key: str = ""
 
+    # Tavily search API key (optional; enables Tavily as primary search provider)
+    tavily_api_key: str = ""
+
     # Deep search configuration (SearXNG + Ollama/Ollama-Cloud loop)
     search_decomposer_model: str = "qwen3.5:cloud"
     search_curator_model: str = "deepseek-v4-flash:cloud"
@@ -340,6 +343,9 @@ class Settings(BaseModel):
             data["ollama_cloud_url"] = os.getenv("HOMELAB_MCP_OLLAMA_CLOUD_URL", "")
         if "ollama_cloud_api_key" not in data:
             data["ollama_cloud_api_key"] = os.getenv("HOMELAB_MCP_OLLAMA_CLOUD_API_KEY", "")
+        # Tavily search API integration
+        if "tavily_api_key" not in data:
+            data["tavily_api_key"] = os.getenv("HOMELAB_MCP_TAVILY_API_KEY", "")
         if "search_decomposer_model" not in data:
             data["search_decomposer_model"] = os.getenv(
                 "HOMELAB_MCP_SEARCH_DECOMPOSER_MODEL", "qwen3.5:cloud"
