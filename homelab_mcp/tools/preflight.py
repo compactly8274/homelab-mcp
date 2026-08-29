@@ -182,7 +182,7 @@ async def preflight_check_tool(
         # Restart-loop pattern: container is currently "restarting" or
         # has been restarted >N times. This is the "FGC chromium" trap.
         if _is_in_restart_loop(ins):
-            if action in ("remove", "stop"):
+            if action in ("remove", "stop", "kill"):
                 warnings.append(
                     f"{name} is in a restart loop "
                     f"(restart_count={restart_count}, status={status!r}). "
@@ -202,7 +202,7 @@ async def preflight_check_tool(
 
         # Recent-start heuristic: started <60s ago → likely an Apply
         # storm in progress, not a real failure.
-        if _started_recently(ins) and action in ("restart", "remove", "stop"):
+        if _started_recently(ins) and action in ("restart", "remove", "stop", "kill"):
             warnings.append(
                 f"{name} started {_RECENT_START_SECONDS}s ago — "
                 f"likely a transient Apply/init phase. Wait 60s and re-check before acting."

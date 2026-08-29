@@ -95,8 +95,11 @@ async def db_snapshot_tool(
             "duration_ms": r.duration_ms,
         }
 
-    # Basic sanity check: iterdump should emit CREATE TABLE statements.
-    if "CREATE TABLE" not in r.stdout.upper():
+    # Basic sanity check: iterdump always wraps its output in a transaction,
+    # even for an empty database or one with only virtual (e.g. FTS) tables,
+    # so CREATE TABLE alone is too strict a signal for "valid dump".
+    stdout_upper = r.stdout.upper()
+    if "BEGIN TRANSACTION" not in stdout_upper or "COMMIT" not in stdout_upper:
         return {
             "ok": False,
             "preflight": preflight,

@@ -12,15 +12,19 @@ _MAX_TIMEOUT_S = 300.0
 _RESTORE_STAGING_DIR = "/tmp"
 
 _RESTORE_SCRIPT = r"""
-import sqlite3, sys
+import os, sqlite3, sys
 db_path = sys.argv[1]
 sql_path = sys.argv[2]
+tmp_path = db_path + ".restore-tmp"
 with open(sql_path, "r", encoding="utf-8") as f:
     sql = f.read()
-con = sqlite3.connect(db_path)
+if os.path.exists(tmp_path):
+    os.remove(tmp_path)
+con = sqlite3.connect(tmp_path)
 con.executescript(sql)
 con.commit()
 con.close()
+os.replace(tmp_path, db_path)
 """
 
 
@@ -56,7 +60,9 @@ async def db_restore_tool(
 
     The snapshot SQL is applied with Python's stdlib ``sqlite3`` module
     inside the container, so no ``sqlite3`` CLI binary is required. The
-    original database file is left in place but overwritten by the restore SQL.
+    restore is built in a fresh temp file alongside ``db_path`` and then
+    atomically swapped into place, so it succeeds even when the target
+    database still has its original schema (e.g. restoring over a live DB).
     """
     if not all([host, container, db_path, snapshot_path]):
         return {"ok": False, "error": "host, container, db_path, and snapshot_path are required"}
@@ -93,7 +99,8 @@ async def db_restore_tool(
             "error": f"failed to read snapshot: {sql}" if isinstance(sql, str) else "failed to read snapshot",
         }
 
-    if "PRAGMA" not in sql.upper() and "CREATE TABLE" not in sql.upper():
+    sql_upper = sql.upper()
+    if "BEGIN TRANSACTION" not in sql_upper or "COMMIT" not in sql_upper:
         return {
             "ok": False,
             "preflight": preflight,
