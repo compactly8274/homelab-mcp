@@ -1,20 +1,22 @@
-# Deploy benchmark framework Phase 1 (`exec_in_container` tool)
+# Deploy benchmark framework (Phases 1 + 2)
 
 ## What this branch changes
 - Adds `exec_in_container_tool` with a strict command allowlist and real preflight gate.
-- Fixes the previously-broken preflight action for `exec_in_container`.
+- Adds `http_probe_tool` for curl-based health/endpoint checks inside the container network.
+- Adds `db_snapshot_tool` / `db_restore_tool` using Python's stdlib `sqlite3` inside containers.
+- Fixes the preflight `valid` action set to include `start` and `kill`.
 - Corrects `HOMELAB_MCP_PRODUCTION_HOURS` default to `["00:00-05:00"]` PT.
 - Adds unit tests + deploy/rollback notes.
 
 ## Pre-deploy checklist
-1. Verify you are on the **clean** branch:
+1. Verify you are on `main` (or the relevant release tag):
    ```bash
    cd /mnt/Data/appdata/homelab-mcp/src
    git fetch origin
-   git status   # should show feature/benchmark-framework-clean
-   git log --oneline -3
+   git status
+   git log --oneline -5
    ```
-2. Save the current live compose baseline (if not already saved):
+2. Save the current live compose baseline:
    ```bash
    cp /mnt/Data/appdata/dockge/stacks/homelab-mcp/compose.yaml \
       /mnt/Data/appdata/dockge/stacks/homelab-mcp/compose.yaml.pre-benchmark.bak
@@ -39,11 +41,25 @@ docker ps -a | grep homelab-mcp
 docker logs --tail 30 homelab-mcp
 ```
 
+## Snapshot / restore path convention
+The container mounts `/mnt/Data/appdata/homelab-mcp` as `/data` **read-write**, while the full
+`/mnt/Data/appdata` tree is mounted read-only. When using `db_snapshot_tool` or `db_restore_tool`,
+always use a path under `/data/...` from the container's perspective, e.g.:
+- snapshot_path: `/data/backups/prowlarr.db.snapshot.sql`
+- db_path: `/config/prowlarr.db`
+
+This writes to `/mnt/Data/appdata/homelab-mcp/backups/...` on the host. Use absolute paths
+inside typical container data dirs (`/config/`, `/data/`, `/app/`, etc.) for `db_path`.
+
 ## Smoke test after deploy
-Use the WebUI/Claude to call `exec_in_container_tool`:
-- `host=truenas`, `container=prowlarr`, `command=["ls", "/app"]` → should succeed.
-- `command=["rm", "-rf", "/"]` → should be blocked by the allowlist.
-- Try `require_approval=true` on a stopped container → preflight should block with `preflight` present.
+Use the WebUI/Claude to call:
+- `exec_in_container_tool(host="truenas", container="prowlarr", command=["ls", "/app"])` → allowed.
+- `exec_in_container_tool(..., command=["rm", "-rf", "/"])` → blocked by allowlist.
+- `http_probe_tool(url="http://prowlarr:9696", host="truenas")` → returns HTTP status.
+- `db_snapshot_tool(host="truenas", container="prowlarr", db_path="/config/prowlarr.db",
+  snapshot_path="/data/backups/prowlarr-test.sql")` → creates snapshot.
+- `db_restore_tool(..., db_path="/config/prowlarr-restored.db",
+  snapshot_path="/data/backups/prowlarr-test.sql")` → restores.
 
 ## Rollback
 If anything looks wrong, run:
@@ -52,6 +68,6 @@ bash /mnt/Data/appdata/homelab-mcp/src/deploy/rollback-benchmark.sh
 ```
 This restores the pre-Phase-1 compose baseline and recreates the container.
 
-## Do not merge this PR until
-- This deployment note has been executed once successfully, or
+## Do not ship until
+- This deployment has been exercised once successfully, or
 - The file-level benchmark mounts have been removed and the code instead lands in the shipped image.
