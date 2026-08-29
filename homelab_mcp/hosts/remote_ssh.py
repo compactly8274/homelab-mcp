@@ -115,7 +115,9 @@ def _parse_remote_stats_line(line: str) -> dict[str, Any] | None:
         value = value.strip()
         if not value or value == "0B":
             return 0
-        units = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4,
+        # docker CLI formats NetIO/BlockIO with go-units' decimal HumanSize,
+        # which emits lowercase "kB" (not "KB"); MemUsage uses binary "KiB".
+        units = {"B": 1, "kB": 1000, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4,
                  "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
         num = ""
         unit = ""

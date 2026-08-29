@@ -55,6 +55,34 @@ async def test_container_metrics_success():
     assert r["metrics"]["containers"]["prowlarr"]["cpu_percent"] == 0.12
 
 
+async def test_container_metrics_all_containers_skips_preflight():
+    """With no container given, there's no single target to preflight-check,
+    so the gate is skipped and the backend is queried directly."""
+    fake = _fake_host("truenas")
+    fake.container_metrics = AsyncMock(
+        return_value={
+            "host": "truenas",
+            "containers": {
+                "prowlarr": {"cpu_percent": 0.1},
+                "sonarr": {"cpu_percent": 0.2},
+            },
+            "sample_seconds": 1.0,
+        }
+    )
+    preflight_mock = _make_preflight()
+
+    with patch("homelab_mcp.tools.container_metrics.preflight", new=preflight_mock), patch(
+        "homelab_mcp.tools.container_metrics.get_host", return_value=fake
+    ):
+        r = await container_metrics_tool("truenas")
+
+    assert r["ok"] is True
+    assert set(r["metrics"]["containers"]) == {"prowlarr", "sonarr"}
+    assert r["preflight"] is None
+    preflight_mock.preflight_check_tool.assert_not_awaited()
+    fake.container_metrics.assert_awaited_once_with(name=None, sample_seconds=1.0)
+
+
 async def test_container_metrics_preflight_blocked():
     with patch(
         "homelab_mcp.tools.container_metrics.preflight",
@@ -94,6 +122,20 @@ def test_parse_remote_stats_line():
     assert parsed["pids"] == 30
 
 
+def test_parse_remote_stats_line_lowercase_kb():
+    """docker CLI formats NetIO/BlockIO with decimal go-units, which uses
+    lowercase "kB" (not "KB") for the kilo unit."""
+    from homelab_mcp.hosts.remote_ssh import _parse_remote_stats_line
+
+    line = '{"BlockIO":"1.5kB / 3.2kB","CPUPerc":"0.12%","Container":"prowlarr","ID":"fda0b77b30af","MemPerc":"0.24%","MemUsage":"172MiB / 70.4GiB","Name":"prowlarr","NetIO":"942kB / 1.4kB","PIDs":"30"}'
+    parsed = _parse_remote_stats_line(line)
+    assert parsed is not None
+    assert parsed["network"]["rx_bytes"] == 942000
+    assert parsed["network"]["tx_bytes"] == 1400
+    assert parsed["block_io"]["read_bytes"] == 1500
+    assert parsed["block_io"]["write_bytes"] == 3200
+
+
 def test_parse_remote_stats_line_bad_json():
     from homelab_mcp.hosts.remote_ssh import _parse_remote_stats_line
 
@@ -121,6 +163,7 @@ def test_normalize_docker_stats():
             "io_service_bytes_recursive": [{"op": "read", "value": 3000}, {"op": "write", "value": 4000}],
             "io_serviced_recursive": [{"op": "read", "value": 5}, {"op": "write", "value": 6}],
         },
+        "pids_stats": {"current": 7},
     }
     out = _normalize_docker_stats(stats)
     assert out["cpu_percent"] > 0
@@ -128,4 +171,4 @@ def test_normalize_docker_stats():
     assert out["memory"]["limit_bytes"] == 800000000
     assert out["network"]["rx_bytes"] == 1000
     assert out["block_io"]["read_bytes"] == 3000
-    assert out["pids"] == 30
+    assert out["pids"] == 7
