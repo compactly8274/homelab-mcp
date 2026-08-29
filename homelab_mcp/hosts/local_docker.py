@@ -350,7 +350,7 @@ class LocalDocker:
 
         result = {"host": self._name, "containers": {}, "sample_seconds": sample_seconds}
         for c in targets:
-            stats = c.stats(stream=False, decode=True)
+            stats = c.stats(stream=False)
             if not isinstance(stats, dict):
                 stats = next(iter(stats), {}) if stats else {}
             cname = (c.attrs.get("Name") or "").lstrip("/")
@@ -418,7 +418,7 @@ def _normalize_docker_stats(stats: dict[str, Any]) -> dict[str, Any]:
         },
         "network": net_summary,
         "block_io": io_summary,
-        "pids": cpu_stats.get("throttling_data", {}).get("periods", 0) or 0,
+        "pids": (stats.get("pids_stats") or {}).get("current", 0) or 0,
         "raw": stats,
     }
 
