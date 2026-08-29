@@ -350,7 +350,7 @@ class LocalDocker:
 
         result = {"host": self._name, "containers": {}, "sample_seconds": sample_seconds}
         for c in targets:
-            stats = c.stats(stream=False, decode=True)
+            stats = c.stats(stream=False)
             if not isinstance(stats, dict):
                 stats = next(iter(stats), {}) if stats else {}
             cname = (c.attrs.get("Name") or "").lstrip("/")

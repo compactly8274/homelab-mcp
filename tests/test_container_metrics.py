@@ -158,6 +158,7 @@ def test_normalize_docker_stats():
             "system_cpu_usage": 70000000000,
         },
         "memory_stats": {"usage": 200000000, "limit": 800000000},
+        "pids_stats": {"current": 30},
         "networks": {"eth0": {"rx_bytes": 1000, "tx_bytes": 2000}},
         "blkio_stats": {
             "io_service_bytes_recursive": [{"op": "read", "value": 3000}, {"op": "write", "value": 4000}],
