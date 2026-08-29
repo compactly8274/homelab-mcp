@@ -1,4 +1,4 @@
-# Deploy benchmark framework (Phases 1 + 2 + 3)
+# Deploy benchmark framework (Phases 1 + 2 + 3 + Tavily)
 
 ## What this branch changes
 * Phase 3: `container_metrics_tool` for point-in-time Docker stats on any host.
@@ -62,6 +62,7 @@ Use the WebUI/Claude to call:
 - `db_restore_tool(..., db_path="/config/prowlarr-restored.db",
   snapshot_path="/data/backups/prowlarr-test.sql")` → restores.
 - `container_metrics_tool(host="truenas", container="prowlarr")` → returns CPU/mem/net/block-IO stats.
+- `tavily_search(query="what is docker compose")` → returns Tavily results when `HOMELAB_MCP_TAVILY_API_KEY` is set, otherwise a clear error.
 
 ## Rollback
 If anything looks wrong, run:

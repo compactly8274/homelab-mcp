@@ -106,6 +106,7 @@ def init_hosts(hosts: dict[str, HostClient], state: Any) -> None:
     import homelab_mcp.tools.searxng
     import homelab_mcp.tools.stacks
     import homelab_mcp.tools.suggest
+    import homelab_mcp.tools.tavily
     import homelab_mcp.tools.updates  # noqa: F401
 
 
