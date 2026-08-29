@@ -1,7 +1,7 @@
 # Deploy benchmark framework (Phases 1 + 2 + 3 + Tavily)
 
 ## What this branch changes
-* Phase 3: `container_metrics_tool` for point-in-time Docker stats on any host.
+* Phase 3: `container_metrics_tool`, Phase 5: `benchmark_restart_tool`, Phase 6: `benchmark_diff_tool` & `benchmark_baseline_tool` for point-in-time Docker stats on any host.
 - Adds `exec_in_container_tool` with a strict command allowlist and real preflight gate.
 - Adds `http_probe_tool` for curl-based health/endpoint checks inside the container network.
 - Adds `db_snapshot_tool` / `db_restore_tool` using Python's stdlib `sqlite3` inside containers.
@@ -64,6 +64,9 @@ Use the WebUI/Claude to call:
 - `container_metrics_tool(host="truenas", container="prowlarr")` → returns CPU/mem/net/block-IO stats.
 - `tavily_search(query="what is docker compose")` → returns Tavily results when `HOMELAB_MCP_TAVILY_API_KEY` is set, otherwise a clear error.
 - `benchmark_load_tool(url="http://prowlarr:9696", requests=50, concurrency=5)` → runs a short HTTP burst and returns latency percentiles + throughput.
+- `benchmark_baseline_tool(host="truenas", container="prowlarr", label="before-update")` → saves a metrics baseline.
+- `benchmark_restart_tool(host="truenas", target="prowlarr", probe_url="http://prowlarr:9696")` → restart and measure settle time.
+- `benchmark_diff_tool(host="truenas", container="prowlarr", baseline_label="before-update")` → compare current state to baseline.
 
 ## Rollback
 If anything looks wrong, run:
