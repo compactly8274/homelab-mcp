@@ -74,9 +74,9 @@ def _http_get_ok(url: str, timeout: float = 10.0) -> tuple[bool, str]:
 async def _run_watchdog() -> dict[str, Any]:
     from homelab_mcp import server
     from homelab_mcp import state as state_mod
+    from homelab_mcp.tools.apply_update import _build_notifier_from_settings
     from homelab_mcp.tools.container_metrics import container_metrics_tool
     from homelab_mcp.tools.searxng import quick_search as quick_search_tool
-    from homelab_mcp.tools.apply_update import _build_notifier_from_settings
 
     env_path = Path(os.environ.get(
         "HOMELAB_MCP_ENV_FILE",
@@ -175,7 +175,7 @@ async def _run_watchdog() -> dict[str, Any]:
                 priority="high",
             )
         else:
-            # heartbeat every run would be noisy; send a daily OK summary? 
+            # heartbeat every run would be noisy; send a daily OK summary?
             # For now, no OK notification to avoid spam.
             pass
     except Exception as e:
