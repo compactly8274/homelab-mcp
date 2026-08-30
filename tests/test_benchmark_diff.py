@@ -119,9 +119,56 @@ async def test_diff_missing_baseline(tmp_benchmark_dir):
 
 
 @pytest.mark.asyncio
-async def test_diff_explicit_path_not_found():
+async def test_diff_explicit_path_not_found(tmp_benchmark_dir):
     result = await benchmark_diff.benchmark_diff_tool(
-        host="truenas", container="prowlarr", baseline_path="/nonexistent.json",
+        host="truenas", container="prowlarr",
+        baseline_path=str(tmp_benchmark_dir / "nonexistent.json"),
     )
     assert result["ok"] is False
     assert "baseline not found" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_diff_explicit_path_outside_benchmark_dir_rejected(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_diff_tool(
+        host="truenas", container="prowlarr", baseline_path="/etc/passwd",
+    )
+    assert result["ok"] is False
+    assert "must be inside the benchmark directory" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_rejects_path_traversal_host(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_baseline_tool(
+        host="../../etc/cron.d/x", include_metrics=False,
+    )
+    assert result["ok"] is False
+    assert "invalid host" in result["error"]
+    assert not any(tmp_benchmark_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_baseline_rejects_path_traversal_container(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_baseline_tool(
+        host="truenas", container="../../etc/passwd", include_metrics=False,
+    )
+    assert result["ok"] is False
+    assert "invalid container" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_rejects_path_traversal_label(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_baseline_tool(
+        host="truenas", label="../evil", include_metrics=False,
+    )
+    assert result["ok"] is False
+    assert "invalid label" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_diff_rejects_path_traversal_host(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_diff_tool(
+        host="../../etc", container="prowlarr",
+    )
+    assert result["ok"] is False
+    assert "invalid host" in result["error"]

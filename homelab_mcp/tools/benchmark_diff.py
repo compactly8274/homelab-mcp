@@ -24,6 +24,13 @@ def _benchmark_dir() -> Path:
     return Path(os.environ.get("HOMELAB_MCP_BENCHMARK_DIR", _DEFAULT_BENCHMARK_DIR))
 
 
+def _is_safe_path_component(value: str) -> bool:
+    """Reject path separators and traversal sequences in a filename component."""
+    if not value:
+        return False
+    return "/" not in value and "\\" not in value and ".." not in value
+
+
 def _baseline_filename(host: str, container: str | None, label: str, ts: str) -> str:
     safe_container = container if container else "all"
     return f"{host}_{safe_container}_{label}_{ts}.json"
@@ -76,8 +83,12 @@ async def benchmark_baseline_tool(
     """
     if not host:
         return {"ok": False, "path": None, "record": None, "error": "host is required"}
-    if not label or "/" in label or ".." in label:
-        return {"ok": False, "path": None, "record": None, "error": "invalid label"}
+    if not _is_safe_path_component(host):
+        return {"ok": False, "path": None, "record": None, "error": f"invalid host: {host!r}"}
+    if container is not None and not _is_safe_path_component(container):
+        return {"ok": False, "path": None, "record": None, "error": f"invalid container: {container!r}"}
+    if not _is_safe_path_component(label):
+        return {"ok": False, "path": None, "record": None, "error": f"invalid label: {label!r}"}
 
     ts = datetime.now(UTC).isoformat().replace(":", "_")
     record: dict[str, Any] = {
@@ -145,10 +156,22 @@ async def benchmark_diff_tool(
     """
     if not host:
         return {"ok": False, "baseline": None, "current": None, "deltas": None, "error": "host is required"}
+    if not _is_safe_path_component(host):
+        return {"ok": False, "baseline": None, "current": None, "deltas": None, "error": f"invalid host: {host!r}"}
+    if container is not None and not _is_safe_path_component(container):
+        return {"ok": False, "baseline": None, "current": None, "deltas": None, "error": f"invalid container: {container!r}"}
+    if not _is_safe_path_component(baseline_label):
+        return {"ok": False, "baseline": None, "current": None, "deltas": None, "error": f"invalid baseline_label: {baseline_label!r}"}
 
     path: Path | None = None
     if baseline_path:
-        path = Path(baseline_path)
+        path = Path(baseline_path).resolve()
+        base_dir = _benchmark_dir().resolve()
+        if not path.is_relative_to(base_dir):
+            return {
+                "ok": False, "baseline": None, "current": None, "deltas": None,
+                "error": f"baseline_path must be inside the benchmark directory: {baseline_path!r}",
+            }
         if not path.is_file():
             return {"ok": False, "baseline": None, "current": None, "deltas": None, "error": f"baseline not found: {baseline_path}"}
     else:

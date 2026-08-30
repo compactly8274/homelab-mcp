@@ -133,7 +133,7 @@ async def test_restart_unhealthy_probe_timeout(mock_host):
          patch("homelab_mcp.tools.benchmark_restart.http_probe_tool", new=AsyncMock(return_value={
              "ok": False, "http_code": None, "error": "timeout",
          })), \
-         patch("homelab_mcp.tools.benchmark_restart.time.sleep", return_value=None):
+         patch("homelab_mcp.tools.benchmark_restart.asyncio.sleep", new=AsyncMock(return_value=None)) as mock_sleep:
         result = await benchmark_restart_tool(
             host="truenas",
             target="prowlarr",
@@ -144,3 +144,4 @@ async def test_restart_unhealthy_probe_timeout(mock_host):
     assert result["ok"] is False
     assert result["healthy_at"] is None
     assert "did not become healthy" in result["error"]
+    mock_sleep.assert_awaited()
