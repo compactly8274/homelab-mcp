@@ -35,6 +35,22 @@ def test_normalize_tavily_response_trims_to_limit():
     assert out["source"] == "tavily"
 
 
+def test_normalize_tavily_response_includes_answer():
+    payload = {
+        "query": "q",
+        "results": [],
+        "answer": "a generated answer",
+    }
+    out = _normalize_tavily_response(payload, "q", 10)
+    assert out["answer"] == "a generated answer"
+
+
+def test_normalize_tavily_response_answer_absent():
+    payload = {"query": "q", "results": []}
+    out = _normalize_tavily_response(payload, "q", 10)
+    assert out["answer"] is None
+
+
 @pytest.mark.asyncio
 async def test_search_tavily_returns_none_without_key():
     with patch("homelab_mcp.tools.tavily._tavily_api_key", return_value=""):

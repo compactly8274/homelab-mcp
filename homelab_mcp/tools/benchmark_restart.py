@@ -7,6 +7,7 @@ the diff tool (Phase 6).
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -172,7 +173,7 @@ async def benchmark_restart_tool(
                     break
         sleep_s = min(probe_interval, deadline - time.monotonic())
         if sleep_s > 0:
-            time.sleep(sleep_s)
+            await asyncio.sleep(sleep_s)
 
     # Capture post-restart metrics
     post_metrics = None

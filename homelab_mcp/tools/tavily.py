@@ -69,6 +69,7 @@ def _normalize_tavily_response(
         "suggestions": [],
         "unresponsive_engines": [],
         "source": "tavily",
+        "answer": payload.get("answer"),
     }
 
 
