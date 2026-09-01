@@ -172,3 +172,41 @@ async def test_diff_rejects_path_traversal_host(tmp_benchmark_dir):
     )
     assert result["ok"] is False
     assert "invalid host" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_rejects_glob_wildcard_host(tmp_benchmark_dir):
+    result = await benchmark_diff.benchmark_baseline_tool(
+        host="*", include_metrics=False,
+    )
+    assert result["ok"] is False
+    assert "invalid host" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_diff_wildcard_host_does_not_match_other_hosts_baseline(tmp_benchmark_dir):
+    """A wildcard host/label must not glob-match another host's baseline file."""
+    d = tmp_benchmark_dir
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "otherhost_all_default_2026-01-01T00_00_00.json").write_text(
+        json.dumps({"host": "otherhost", "container": None, "label": "default", "metrics": {}})
+    )
+    result = await benchmark_diff.benchmark_diff_tool(
+        host="*", baseline_label="*",
+    )
+    assert result["ok"] is False
+    assert "invalid host" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_diff_explicit_path_symlink_loop_returns_error(tmp_benchmark_dir):
+    """A resolve() failure (e.g. a symlink loop) must return an error, not raise."""
+    d = tmp_benchmark_dir
+    d.mkdir(parents=True, exist_ok=True)
+    loop_path = d / "loop.json"
+    loop_path.symlink_to(loop_path)
+    result = await benchmark_diff.benchmark_diff_tool(
+        host="truenas", container="prowlarr", baseline_path=str(loop_path),
+    )
+    assert result["ok"] is False
+    assert "invalid baseline_path" in result["error"]

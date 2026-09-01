@@ -24,11 +24,19 @@ def _benchmark_dir() -> Path:
     return Path(os.environ.get("HOMELAB_MCP_BENCHMARK_DIR", _DEFAULT_BENCHMARK_DIR))
 
 
+_UNSAFE_PATH_CHARS = ("/", "\\", "*", "?", "[", "]")
+
+
 def _is_safe_path_component(value: str) -> bool:
-    """Reject path separators and traversal sequences in a filename component."""
-    if not value:
+    """Reject path separators, traversal sequences, and glob metacharacters.
+
+    Glob metacharacters matter because ``_find_baseline`` uses this value to
+    build a ``Path.glob()`` pattern; without this, a wildcard host/container/
+    label would match other hosts' or containers' baseline files.
+    """
+    if not value or ".." in value:
         return False
-    return "/" not in value and "\\" not in value and ".." not in value
+    return not any(c in value for c in _UNSAFE_PATH_CHARS)
 
 
 def _baseline_filename(host: str, container: str | None, label: str, ts: str) -> str:
@@ -165,8 +173,14 @@ async def benchmark_diff_tool(
 
     path: Path | None = None
     if baseline_path:
-        path = Path(baseline_path).resolve()
-        base_dir = _benchmark_dir().resolve()
+        try:
+            path = Path(baseline_path).resolve()
+            base_dir = _benchmark_dir().resolve()
+        except (OSError, RuntimeError) as e:
+            return {
+                "ok": False, "baseline": None, "current": None, "deltas": None,
+                "error": f"invalid baseline_path: {baseline_path!r} ({e})",
+            }
         if not path.is_relative_to(base_dir):
             return {
                 "ok": False, "baseline": None, "current": None, "deltas": None,
