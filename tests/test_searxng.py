@@ -55,7 +55,14 @@ async def test_searxng_search_returns_normalized_results() -> None:
             return False
 
         async def get(self, url, headers=None, params=None, **kwargs):
-            return _mock_response({"instance_name": "TestSearX", "engines": []})
+            return _mock_response({
+                "instance_name": "TestSearX",
+                "engines": [
+                    {"name": "yandex", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "ynd"},
+                    {"name": "wikipedia", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "wp"},
+                    {"name": "bing", "categories": ["general", "images"], "languages": ["all"], "enabled": False, "shortcut": "bi"},
+                ],
+            })
 
         async def post(self, url, data=None, headers=None, **kwargs):
             return _mock_response(fake_json)
@@ -102,6 +109,15 @@ async def test_searxng_search_clamps_limit() -> None:
 
         async def get(self, url, headers=None, params=None, **kwargs):
             captured["url"] = url
+            if url.endswith("/config"):
+                return _mock_response({
+                    "instance_name": "TestSearX",
+                    "engines": [
+                        {"name": "yandex", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "ynd"},
+                        {"name": "wikipedia", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "wp"},
+                        {"name": "bing", "categories": ["general"], "languages": ["all"], "enabled": False, "shortcut": "bi"},
+                    ],
+                })
             return _mock_response(fake_json)
 
         async def post(self, url, data=None, headers=None, **kwargs):
@@ -124,8 +140,8 @@ async def test_searxng_engines_handles_list_shape() -> None:
     fake_json = {
         "instance_name": "TestSearX",
         "engines": [
-            {"name": "google", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "go", "timeout": 3.0},
-            {"name": "bing", "categories": ["general", "images"], "languages": ["all"], "enabled": False, "shortcut": "bi", "timeout": 3.0},
+            {"name": "wikipedia", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "wp", "timeout": 3.0},
+            {"name": "yandex", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "ynd", "timeout": 3.0},
         ],
         "categories": ["general", "images", "news"],
     }
@@ -154,7 +170,7 @@ async def test_searxng_engines_handles_list_shape() -> None:
 
     assert result["instance_name"] == "TestSearX"
     assert len(result["engines"]) == 2
-    assert result["engines"][0]["name"] == "bing"
+    assert result["engines"][0]["name"] == "wikipedia"
     assert result["categories"] == ["general", "images", "news"]
 
 
@@ -185,3 +201,79 @@ async def test_searxng_suggestions_handles_404_gracefully() -> None:
 
     assert "error" in result
     assert "autocomplete" in result["note"]
+
+
+# ---------------------------------------------------------------------------
+# Engine policy tests (Bing quarantine, recency/default/evergreen sets)
+# ---------------------------------------------------------------------------
+
+from homelab_mcp.tools import searxng as _searxng_mod
+
+
+def _split_engines(csv: str) -> list[str]:
+    return [e.strip() for e in csv.split(",") if e.strip()]
+
+
+def test_bing_quarantine_flag_defaults_to_false() -> None:
+    """Bing is disabled by default."""
+    assert _searxng_mod.BING_ENABLED is False
+
+
+def test_engine_sets_exclude_bing_when_disabled() -> None:
+    """With BING_ENABLED False, no active engine set contains the general bing engine."""
+    sets = [
+        _searxng_mod._GENERAL_ENGINES,
+        _searxng_mod._EVERGREEN_ENGINES,
+        _searxng_mod._RECENCY_ENGINES,
+    ]
+    for engine_csv in sets:
+        assert "bing" not in _split_engines(engine_csv), f"bing found in {engine_csv}"
+
+
+def test_default_engine_set_exact_when_bing_disabled() -> None:
+    """Default fan-out is exactly fynd + yandex + wikipedia."""
+    assert set(_split_engines(_searxng_mod._GENERAL_ENGINES)) == {"fynd", "yandex", "wikipedia"}
+
+
+def test_recency_engine_set_exact() -> None:
+    """Recency queries use only yandex + wikipedia."""
+    assert _searxng_mod._RECENCY_ENGINES == "yandex,wikipedia"
+    category, engines, _ = _searxng_mod._classify_query("who won the 2024 world series")
+    assert engines == "yandex,wikipedia"
+    assert category == "general"
+
+
+def test_evergreen_set_formula_restores_bing_when_enabled() -> None:
+    """The evergreen set formula restores Bing when BING_ENABLED is True."""
+    expected = "bing,yandex,wikipedia" if _searxng_mod.BING_ENABLED else "yandex,wikipedia"
+    assert _searxng_mod._EVERGREEN_ENGINES == expected
+
+
+def test_general_set_formula_matches_bing_toggle() -> None:
+    """The general set formula matches the Bing quarantine toggle."""
+    expected = "yandex,wikipedia" if _searxng_mod.BING_ENABLED else "fynd,yandex,wikipedia"
+    assert _searxng_mod._GENERAL_ENGINES == expected
+
+
+# ---------------------------------------------------------------------------
+# Silent-empty failure detector tests
+# ---------------------------------------------------------------------------
+
+
+def test_silent_empty_failure_single_engine_zero_results() -> None:
+    """A single responsive engine returning zero results is a silent empty failure."""
+    payload = {"number_of_results": 0, "unresponsive_engines": []}
+    assert _searxng_mod._is_silent_empty_failure(payload, "yandex") is True
+
+
+def test_silent_empty_failure_not_triggered_for_multiple_engines() -> None:
+    """Zero results with multiple engines may be a genuine empty query; do not flag."""
+    payload = {"number_of_results": 0, "unresponsive_engines": []}
+    assert _searxng_mod._is_silent_empty_failure(payload, "yandex,wikipedia") is False
+
+
+def test_silent_empty_failure_not_triggered_when_engine_marked_unresponsive() -> None:
+    """An engine reported as unresponsive is a normal failure, not silent empty."""
+    payload = {"number_of_results": 0, "unresponsive_engines": ["yandex"]}
+    assert _searxng_mod._is_silent_empty_failure(payload, "yandex") is False
+

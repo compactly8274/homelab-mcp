@@ -56,7 +56,14 @@ async def test_quick_search_returns_results() -> None:
 
         async def get(self, url, headers=None, params=None, **kwargs):
             captured["url"] = url
-            return _mock_response({"instance_name": "TestSearX", "engines": []})
+            return _mock_response({
+                "instance_name": "TestSearX",
+                "engines": [
+                    {"name": "yandex", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "ynd"},
+                    {"name": "wikipedia", "categories": ["general"], "languages": ["en"], "enabled": True, "shortcut": "wp"},
+                    {"name": "bing", "categories": ["general"], "languages": ["all"], "enabled": False, "shortcut": "bi"},
+                ],
+            })
 
         async def post(self, url, data=None, headers=None, **kwargs):
             captured.update(data or {})

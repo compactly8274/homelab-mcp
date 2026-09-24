@@ -20,6 +20,8 @@ directly, skipping the local hop.
 
 from __future__ import annotations
 
+import atexit
+
 import asyncio
 import hashlib
 import html
@@ -37,16 +39,14 @@ import httpx
 
 from homelab_mcp.config import Settings
 from homelab_mcp.server import mcp
+from homelab_mcp.tools.search_quota import is_available, increment, mark_exhausted
 
 _cached_settings: Settings | None = None
-
-
 
 # Defaults that mirror what deep_search resolves from Settings() when the
 # caller passes None for max_subqueries / results_per_subquery.
 _DEFAULT_MAX_SUB = int(os.environ.get("HOMELAB_MCP_SEARCH_MAX_SUBQUERIES", "4") or 4)
 _DEFAULT_PER = int(os.environ.get("HOMELAB_MCP_SEARCH_RESULTS_PER_SUBQUERY", "5") or 5)
-
 
 # Validate cache env vars once at import; bad values disable the cache safely.
 def _validate_cache_env() -> tuple[int, str]:
@@ -63,8 +63,6 @@ def _validate_cache_env() -> tuple[int, str]:
         log.warning("Invalid HOMELAB_MCP_SEARCH_CACHE_BACKEND=%r; using memory", backend)
         backend = "memory"
     return ttl, backend
-
-
 
 # Synthesis cache state (opt-in, gated by HOMELAB_MCP_SEARCH_CACHE_TTL).
 _MEMORY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -87,14 +85,38 @@ _TOKEN_USAGE_LOCK = threading.Lock()
 # Lock protecting disk cache read/modify/write. Memory cache has its own lock.
 _DISK_CACHE_LOCK = threading.Lock()
 
+class _Stages:
+    """Simple stage timer for deep_search pipeline instrumentation."""
+    def __init__(self, request_id: str, query: str, **ctx: Any):
+        self.request_id = request_id
+        self.query = query
+        self.ctx = ctx
+        self.durations: dict[str, float] = {}
+
+    def start(self, name: str) -> float:
+        return time.perf_counter()
+
+    def end(self, name: str, t0: float, **extra: Any) -> None:
+        dt = time.perf_counter() - t0
+        self.durations[name] = self.durations.get(name, 0.0) + dt
+        ctx = " ".join(f"{k}={v}" for k, v in {**self.ctx, **extra}.items())
+        log.info("search_stage rid=%s stage=%s dur_ms=%.1f %s", self.request_id, name, dt * 1000, ctx)
+
+    def summary(self, **extra: Any) -> None:
+        payload = dict(
+            self.ctx,
+            request_id=self.request_id,
+            stages={k: round(v * 1000, 1) for k, v in self.durations.items()},
+            total_ms=round(sum(self.durations.values()) * 1000, 1),
+            **extra,
+        )
+        log.info("search_summary %s", json.dumps(payload, sort_keys=True))
 
 def _cache_ttl() -> int:
     return _CACHE_TTL_VALIDATED
 
-
 def _cache_backend() -> str:
     return _CACHE_BACKEND_VALIDATED
-
 
 def _synthesis_cache_key(
     query: str,
@@ -131,6 +153,32 @@ def _synthesis_cache_key(
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
+def _plain_search_cache_key(
+    query: str,
+    category: str,
+    engines: str,
+    language: str,
+    limit: int,
+    fetch_full_pages: bool,
+) -> str:
+    """Stable hash of all inputs that affect quick_search/searxng_search output."""
+    norm_limit = max(1, min(50, int(limit)))
+    norm_fetch = bool(fetch_full_pages)
+    norm_lang = language or "en"
+    norm_engines = engines or ""
+    norm_category = category or ""
+    payload = json.dumps(
+        {
+            "query": query,
+            "category": norm_category,
+            "engines": norm_engines,
+            "language": norm_lang,
+            "limit": norm_limit,
+            "fetch_full_pages": norm_fetch,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 def _decomposer_cache_key(
     query: str,
@@ -152,7 +200,6 @@ def _decomposer_cache_key(
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
-
 def _decomposer_cache_get(key: str) -> list[str] | None:
     ttl = _cache_ttl()
     if ttl <= 0:
@@ -165,7 +212,6 @@ def _decomposer_cache_get(key: str) -> list[str] | None:
         if entry:
             del _DECOMPOSER_MEMORY_CACHE[key]
     return None
-
 
 def _decomposer_cache_set(key: str, subqueries: list[str], *, request_id: str | None = None) -> None:
     ttl = _cache_ttl()
@@ -185,7 +231,6 @@ def _decomposer_cache_set(key: str, subqueries: list[str], *, request_id: str | 
             for k, _ in sorted_items[:count - _MEMORY_CACHE_EVICT_HARD]:
                 del _DECOMPOSER_MEMORY_CACHE[k]
             log.info("decomposer cache evicted=%d request_id=%s", count - _MEMORY_CACHE_EVICT_HARD, request_id)
-
 
 def _cache_get(key: str) -> dict[str, Any] | None:
     ttl = _cache_ttl()
@@ -216,7 +261,6 @@ def _cache_get(key: str) -> dict[str, Any] | None:
         return None
     return None
 
-
 def _migrate_cached_value(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -224,7 +268,6 @@ def _migrate_cached_value(value: Any) -> dict[str, Any]:
         return {"results": [], "synthesis": value}
     log.warning("search cache entry has unexpected type %s; returning empty", type(value).__name__)
     return {"results": [], "synthesis": ""}
-
 
 def _cache_set(key: str, value: dict[str, Any], *, request_id: str | None = None) -> None:
     ttl = _cache_ttl()
@@ -255,7 +298,6 @@ def _cache_set(key: str, value: dict[str, Any], *, request_id: str | None = None
             except Exception:
                 log.exception("search cache disk write failed")
 
-
 def _evict_memory_cache(now: float, ttl: int, *, request_id: str | None = None) -> None:
     count = len(_MEMORY_CACHE)
     if count < _MEMORY_CACHE_EVICT_SOFT:
@@ -274,7 +316,6 @@ def _evict_memory_cache(now: float, ttl: int, *, request_id: str | None = None) 
         del _MEMORY_CACHE[k]
     total_evicted = len(expired_keys) + evict_count
     log.info("search cache evicted=%d request_id=%s", total_evicted, request_id)
-
 
 def _evict_disk_cache(data: dict[str, Any], now: float, ttl: int) -> int:
     evicted = 0
@@ -298,7 +339,6 @@ def _get_settings() -> Settings:
         _cached_settings = Settings()
     return _cached_settings
 
-
 log = logging.getLogger(__name__)
 
 # Finalize cache env validation now that the logger exists.
@@ -310,10 +350,44 @@ _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 # crossref fail fast and the retry logic can recover quickly instead of
 # blocking for the full first attempt.
 _SEARXNG_TIMEOUT = float(os.environ.get("HOMELAB_MCP_SEARCH_TIMEOUT", "15.0"))
+_QUICK_SEARCH_SCIENCE_TIMEOUT = float(
+    os.environ.get("HOMELAB_MCP_QUICK_SEARCH_SCIENCE_TIMEOUT", "8.0") or 8.0
+)
 _OLLAMA_TIMEOUT = 60.0
 _PAGE_TIMEOUT = 8.0
 _MAX_BODY_BYTES = 400 * 1024  # 400 KiB cap per page fetch
-_EVIDENCE_BUDGET_CHARS = 80_000  # ~20k tokens ceiling for curator context
+_EVIDENCE_BUDGET_CHARS = int(os.environ.get("HOMELAB_MCP_SEARCH_EVIDENCE_BUDGET", "30000"))
+
+# Shared SearXNG client with connection pooling. Created lazily so the module
+# can still be imported when SearXNG is unreachable.
+_searxng_client: httpx.AsyncClient | None = None
+_searxng_client_lock = asyncio.Lock()
+
+async def _get_searxng_client() -> httpx.AsyncClient:
+    """Return a long-lived AsyncClient for SearXNG calls."""
+    global _searxng_client
+    if _searxng_client is None:
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        _searxng_client = httpx.AsyncClient(
+            timeout=_SEARXNG_TIMEOUT,
+            limits=limits,
+            http2=False,
+        )
+    return _searxng_client
+
+async def _close_searxng_client() -> None:
+    global _searxng_client
+    if _searxng_client is not None:
+        await _searxng_client.aclose()
+        _searxng_client = None
+
+def _register_searxng_client_shutdown() -> None:
+    try:
+        asyncio.run(_close_searxng_client())
+    except Exception:
+        pass
+
+atexit.register(_register_searxng_client_shutdown)
 
 # Strip most HTML tags, keep a little whitespace between them.
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -330,19 +404,39 @@ _GENERAL_TECH_KEYWORDS = frozenset(
     ["github", "repository", "api", "documentation", "tutorial", "howto", "guide", "install", "configure", "deploy", "docker", "kubernetes", "linux", "error", "troubleshooting", "bug", "issue", "changelog", "release", "notes", "computer", "science", "algorithm", "machine", "learning", "neural", "network", "llm", "dataset", "benchmark", "conference", "proceedings"]
 )
 
-# Fast, reliable general engines. Only include engines actually enabled on SearXNG.
-# google web search is intentionally disabled by instance policy.  privacywall
-# stopped returning results after the deploy window, so the fallback general
-# engine list now uses the currently healthy engines found during the deploy
-# sweep: yandex and reloado are the most reliable, with fynd and Bing as
-# noisier fallbacks so we never get zero results.
-_GENERAL_ENGINES = "bing,yandex,reloado,fynd,wikipedia,wikidata"
+# Bing quality quarantine: it returns confident garbage on multi-token queries,
+# which is invisible to the silent-empty detector.  Re-enable only if SearXNG's
+# bing scraper is fixed and verified.
+BING_ENABLED = False
+
+# General path: engines that currently answer well on this SearXNG instance.
+# Bing is excluded from default fan-out because it deterministically returns
+# decoys or silent-empty on recency/entity/question-shaped queries.
+_GENERAL_ENGINES = "yandex,wikipedia" if BING_ENABLED else "fynd,yandex,wikipedia"
+
+# Fallback set for simple evergreen factual noun phrases (e.g. "capital of Canada").
+# With Bing quarantined this falls back to the same reliable engines as the
+# recency path; Bing is only restored when BING_ENABLED is True.
+_EVERGREEN_ENGINES = "bing,yandex,wikipedia" if BING_ENABLED else "yandex,wikipedia"
+
+# Recency / current-event / entity queries: narrow, fast, Bing-free.
+_RECENCY_ENGINES = "yandex,wikipedia"
+
+# Signals that a query is asking for recent/current/entity facts.
+# Includes year tokens, "who won / current / latest", major recurring events,
+# and executive/office lookups.  These are the shapes bing systematically fails.
+_RECENCY_SIGNAL_RE = re.compile(
+    r"\b(?:20\d{2}|who\s+won|what\s+happened|when\s+did|current|latest|recent|today|"
+    r"this\s+year|last\s+year|CEO\s+of|president\s+of|Nobel\s+Prize|World\s+Series|"
+    r"Super\s+Bowl|NBA\s+finals|election|champion|winner\s+of|score\s+of)\b",
+    re.IGNORECASE,
+)
 
 # Science engines that are usually fast and accurate on academic queries.
 # semantic scholar is excluded because the upstream SearXNG engine frequently
 # returns non-JSON responses (JSONDecodeError / "parsing error") and is
 # effectively unreliable from this instance.
-_SCIENCE_ENGINES = "arxiv,google scholar,crossref,openalex,pubmed,pdbe,openairedatasets,openairepublications"
+_SCIENCE_ENGINES = "arxiv,google scholar,crossref,openalex,pubmed,pdbe,openairepublications"
 
 # Local/IT/tech engines. Only include engines actually enabled on SearXNG.
 # Note: for *Q&A-style* technical troubleshooting we now use the dedicated
@@ -365,30 +459,24 @@ _DEFAULT_ENGINES_BY_CATEGORY: dict[str, str] = {
     "it": _IT_ENGINES,
     "q&a": _Q_A_ENGINES,
     "news": _NEWS_ENGINES,
-    "files": _FILES_ENGINES,
     "general": _GENERAL_ENGINES,
 }
-
 
 def _searxng_base_url() -> str:
     s = _get_settings()
     return (s.searxng_url or _DEFAULT_SEARXNG_URL).rstrip("/")
 
-
 def _ollama_base_url() -> str:
     s = _get_settings()
     return (s.ollama_url or _DEFAULT_OLLAMA_URL).rstrip("/")
-
 
 def _ollama_cloud_url() -> str | None:
     s = _get_settings()
     return s.ollama_cloud_url.rstrip("/") if s.ollama_cloud_url else None
 
-
 def _ollama_cloud_api_key() -> str | None:
     s = _get_settings()
     return s.ollama_cloud_api_key or None
-
 
 # Cache of enabled engine names populated lazily from /config.
 _ENABLED_ENGINES_TTL_SECONDS = 300.0  # 5 minutes
@@ -397,7 +485,6 @@ _enabled_engines_cache: dict[str, str] | None = None
 _enabled_engines_cache_ts: float = 0.0
 _searxng_config_cache: dict[str, Any] | None = None
 _searxng_config_cache_ts: float = 0.0
-
 
 async def _get_searxng_config(client: httpx.AsyncClient) -> dict[str, Any]:
     """Fetch SearXNG /config with a 5-minute TTL.
@@ -435,7 +522,6 @@ async def _get_searxng_config(client: httpx.AsyncClient) -> dict[str, Any]:
         _ENABLED_ENGINES_TTL_SECONDS - _ENABLED_ENGINES_CACHE_ERROR_TTL_SECONDS
     )
     return data
-
 
 async def _get_enabled_engines(client: httpx.AsyncClient, *, force_refresh: bool = False) -> dict[str, str]:
     """Return a mapping of lowercased engine name/shortcut -> canonical name.
@@ -477,54 +563,36 @@ async def _get_enabled_engines(client: httpx.AsyncClient, *, force_refresh: bool
     _enabled_engines_cache_ts = _searxng_config_cache_ts
     return _enabled_engines_cache
 
-
-def _filter_engines(enabled: dict[str, str], engines: str) -> str:
+def _filter_engines(enabled: dict[str, str], engines: str) -> tuple[str, list[str]]:
     """Drop disabled/unknown engine names and resolve shortcuts.
 
     ``enabled`` is a mapping of lowercased engine name/shortcut to the
     canonical engine name. We do not do substring matching: an unknown
     engine is silently dropped.
+
+    Returns a tuple of (canonical_engines_csv, dropped_names).  When the
+    caller explicitly requests engines and every one of them is dropped,
+    the caller must be told; otherwise an empty engines parameter reaches
+    SearXNG and it silently substitutes its default category set.
     """
     if not engines or not engines.strip():
-        return ""
+        return ("", [])
     requested = [e.strip() for e in engines.split(",") if e.strip()]
     canonical: list[str] = []
     seen: set[str] = set()
+    dropped: list[str] = []
     for e in requested:
         key = e.lower()
         if key in enabled and key not in seen:
             canonical.append(enabled[key])
             seen.add(key)
-    return ",".join(canonical) if canonical else ""
-
-
-# Engines that SearXNG lists as enabled but that are known to return
-# persistent non-JSON/unresponsive errors from this instance. They are
-# dropped from explicit engine lists so they do not pollute
-# unresponsive_engines. Callers can still force them by name if they want
-# to accept the failure rate.
-_UNSTABLE_ENGINES: frozenset[str] = frozenset({"semantic scholar"})
-
-
-def _drop_unstable_engines(engines: str) -> tuple[str, list[str]]:
-    """Return (cleaned engines string, list of dropped unstable names)."""
-    if not engines:
-        return "", []
-    kept: list[str] = []
-    dropped: list[str] = []
-    for e in engines.split(","):
-        name = e.strip()
-        if name.lower() in _UNSTABLE_ENGINES:
-            dropped.append(name)
-            continue
-        kept.append(name)
-    return ",".join(kept), dropped
-
+        else:
+            dropped.append(e)
+    return (",".join(canonical) if canonical else "", dropped)
 
 def _is_cloud_model(model: str) -> bool:
     """Return True if the model name should route to Ollama Cloud."""
     return model.endswith(":cloud")
-
 
 def _normalize_results(payload: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     """Flatten SearXNG JSON into a list of result dicts."""
@@ -548,7 +616,6 @@ def _normalize_results(payload: dict[str, Any], limit: int) -> list[dict[str, An
             break
     return out
 
-
 def _exc_info(e: Exception) -> str:
     """Return a human-readable summary of an exception including its type and message."""
     name = type(e).__name__
@@ -557,9 +624,34 @@ def _exc_info(e: Exception) -> str:
         msg = getattr(e, "reason", "") or "(no details)"
     return f"{name}: {msg}".strip()
 
-
 _TRANSIENT_EXCEPTIONS = (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError, ConnectionResetError, BrokenPipeError)
 
+def _is_silent_empty_failure(
+    payload: dict[str, Any],
+    requested_engines_csv: str,
+) -> bool:
+    """Detect an engine that responded successfully but produced zero results.
+
+    This is the "silent empty" failure mode: SearXNG reports the engine as
+    responsive (``unresponsive_engines`` is empty or does not contain the
+    engine) yet returns no results.  It typically means the engine parsed a
+    degraded or bot-filtered page and gave up without surfacing an error.
+
+    NOTE: this detector does NOT catch Bing's confident-garbage failure mode,
+    where Bing returns non-empty, irrelevant results on multi-token queries.
+    Bing is quarantined via ``BING_ENABLED`` and removed from active engine sets.
+
+    We only flag this when a single engine was requested.  With multiple
+    engines a genuine zero-result query is common, so we preserve SearXNG's
+    honest empty response rather than second-guess it.
+    """
+    requested = [e.strip() for e in requested_engines_csv.split(",") if e.strip()]
+    if len(requested) != 1:
+        return False
+    unresponsive = payload.get("unresponsive_engines", []) or []
+    if requested[0].lower() in {str(e).lower() for e in unresponsive}:
+        return False
+    return payload.get("number_of_results", 0) == 0
 
 async def _search_searxng(
     client: httpx.AsyncClient,
@@ -572,10 +664,22 @@ async def _search_searxng(
 ) -> dict[str, Any]:
     """Call the SearXNG ``/search`` JSON endpoint."""
     enabled = await _get_enabled_engines(client)
-    filtered_engines = _filter_engines(enabled, engines)
-    filtered_engines, dropped = _drop_unstable_engines(filtered_engines)
-    if dropped:
-        log.warning("Dropping known-unstable engines from request: %s", dropped)
+    filtered_engines, dropped = _filter_engines(enabled, engines)
+    caller_specified_engines = bool(engines and engines.strip())
+    # CHANGE 4: if the caller named engines and none survived filtering,
+    # do not ask SearXNG to pick defaults.  Return an honest empty set
+    # and name the dropped engines as unresponsive.
+    if caller_specified_engines and not filtered_engines:
+        log.warning("All requested engines were dropped: %s", dropped)
+        return {
+            "query": query.strip(),
+            "category": category,
+            "source": "searxng",
+            "number_of_results": 0,
+            "results": [],
+            "suggestions": [],
+            "unresponsive_engines": dropped,
+        }
     params: dict[str, str] = {
         "q": query.strip(),
         "format": "json",
@@ -588,45 +692,42 @@ async def _search_searxng(
         params["engines"] = filtered_engines
     url = f"{_searxng_base_url()}/search"
 
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            r = await client.post(
-                url,
-                data=params,
-                headers={"Accept": "application/json"},
-                timeout=_SEARXNG_TIMEOUT,
-            )
-            r.raise_for_status()
-            payload = r.json()
-            break
-        except _TRANSIENT_EXCEPTIONS as e:
-            last_exc = e
-            log.warning("SearXNG request transient failure (attempt %d/%d): %s", attempt + 1, 2, _exc_info(e))
-            if attempt == 0:
-                await asyncio.sleep(0.5)
-                continue
-            raise
-        except Exception:
-            raise
-    else:
-        assert last_exc is not None
-        raise last_exc
+    r = await client.post(
+        url,
+        data=params,
+        headers={"Accept": "application/json"},
+        timeout=_SEARXNG_TIMEOUT,
+    )
+    r.raise_for_status()
+    payload = r.json()
 
     normalized = _normalize_results(payload, limit)
-    return {
+    unresponsive = dropped + [
+        (e[0] if isinstance(e, (list, tuple)) else str(e))
+        for e in payload.get("unresponsive_engines", [])
+        if e
+    ]
+    result = {
         "query": payload.get("query", query),
         "category": category,
+        "source": "searxng",
         "number_of_results": len(normalized),
         "results": normalized,
         "suggestions": payload.get("suggestions", []),
-        "unresponsive_engines": [
-            (e[0] if isinstance(e, (list, tuple)) else str(e))
-            for e in payload.get("unresponsive_engines", [])
-            if e
-        ],
+        "unresponsive_engines": unresponsive,
     }
-
+    # If a single requested engine responded successfully but returned nothing,
+    # treat that as an unresponsive engine so the failure is visible.
+    if _is_silent_empty_failure(result, filtered_engines):
+        engine = filtered_engines.strip()
+        if engine and engine not in unresponsive:
+            result["unresponsive_engines"] = unresponsive + [engine]
+            log.warning(
+                "_search_searxng: silent empty for single engine %s query=%r; marking unresponsive",
+                engine,
+                query,
+            )
+    return result
 
 async def _call_ollama(
     client: httpx.AsyncClient,
@@ -638,6 +739,7 @@ async def _call_ollama(
     json_mode: bool = False,
     timeout: float | None = None,
     request_id: str | None = None,
+    extra_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call an Ollama-compatible endpoint and return the parsed response.
 
@@ -658,11 +760,14 @@ async def _call_ollama(
         url = f"{_ollama_base_url()}/api/generate"
         headers = {}
 
+    options: dict[str, Any] = {"temperature": temperature}
+    if extra_options:
+        options.update(extra_options)
     payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": temperature},
+        "options": options,
     }
     if system:
         payload["system"] = system
@@ -711,7 +816,6 @@ async def _call_ollama(
             data["parsed_response"] = None
     return data
 
-
 def _strip_html(raw: str) -> str:
     """Best-effort HTML-to-text for page snippets."""
     text = _TAG_RE.sub(" ", raw)
@@ -719,9 +823,7 @@ def _strip_html(raw: str) -> str:
     text = _WS_RE.sub(" ", text).strip()
     return text
 
-
 _VERSION_RE = re.compile(r"\b\d+\.\d+(?:\.\d+)?(?:\s*(?:alpha|beta|rc|release|version))?\b", re.IGNORECASE)
-
 
 def _classify_query(query: str) -> tuple[str, str, bool]:
     """Classify a query and return (category, engines, fetch_full_pages_default).
@@ -784,15 +886,24 @@ def _classify_query(query: str) -> tuple[str, str, bool]:
             return "it", _IT_ENGINES, False
         return "general", _GENERAL_ENGINES, False
 
-    # File-sharing / torrent lookups.
-    if any(k in lowered for k in ("torrent", "magnet", "download", "iso", "apk", "crack")):
-        return "files", _FILES_ENGINES, False
+    # File-sharing / torrent lookups intentionally removed from auto-routing.
+    # The SearXNG file engines on this instance are individually unreliable
+    # (SSL errors, timeouts), so queries with these words fall through to
+    # the general category instead of being forced into a dead category.
 
     if tech_hits >= 2:
         return "it", _IT_ENGINES, False
 
-    return "general", _GENERAL_ENGINES, False
+    # Recency / current-event / entity queries are the class bing silently fails.
+    # They get a narrow, Bing-free set.  The silent-empty detector below covers
+    # the case where this set returns zero results; it does NOT cover Bing's
+    # confident-garbage failure mode.
+    if _RECENCY_SIGNAL_RE.search(query):
+        return "general", _RECENCY_ENGINES, False
 
+    # Simple evergreen factual lookups use the curated general set.  Bing is
+    # only present when BING_ENABLED is True.
+    return "general", _EVERGREEN_ENGINES, False
 
 def _maybe_override_category_engines(
     query: str,
@@ -805,12 +916,18 @@ def _maybe_override_category_engines(
     final_category = category if category and category.strip() else suggested_category
     if engines and engines.strip():
         final_engines = engines
+    elif final_category == "general":
+        # General-category queries have per-query engine curation (recency vs
+        # evergreen).  Use the engines selected by _classify_query directly.
+        final_engines = suggested_engines
+    elif final_category in _DEFAULT_ENGINES_BY_CATEGORY:
+        final_engines = _DEFAULT_ENGINES_BY_CATEGORY[final_category]
     else:
-        # If caller gave a category, honor its canonical engines. Otherwise fall
-        # back to the query-classified default engines.
-        final_engines = _DEFAULT_ENGINES_BY_CATEGORY.get(final_category, suggested_engines)
+        # For explicit but unknown categories (images, videos, music, files, ...),
+        # pass an empty engines string so SearXNG uses the API's own category
+        # defaults instead of silently returning general-web results.
+        final_engines = ""
     return final_category, final_engines
-
 
 async def _fetch_page(
     client: httpx.AsyncClient,
@@ -874,7 +991,6 @@ async def _fetch_page(
         "truncated": len(text) > max_chars,
     }
 
-
 async def _maybe_enrich_results(
     results: list[dict[str, Any]],
     *,
@@ -898,7 +1014,6 @@ async def _maybe_enrich_results(
             r["page"] = page
     return results
 
-
 def _dedup_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplicate results by URL, keeping the first occurrence."""
     seen: set[str] = set()
@@ -910,7 +1025,6 @@ def _dedup_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(url)
         out.append(r)
     return out
-
 
 @mcp.tool()
 async def searxng_search(
@@ -948,11 +1062,19 @@ async def searxng_search(
     final_category, final_engines = _maybe_override_category_engines(
         query, category=category, engines=engines
     )
+    request_id = uuid.uuid4().hex[:8]
+    cache_key = _plain_search_cache_key(
+        query, final_category, final_engines, language, limit, fetch_full_pages or False
+    )
+    cached = _cache_get(f"searxng_plain:{cache_key}")
+    if cached is not None:
+        log.info("searxng_search plain cache hit request_id=%s", request_id)
+        return {**cached, "cached": True}
+    client = await _get_searxng_client()
     try:
-        async with httpx.AsyncClient(timeout=_SEARXNG_TIMEOUT) as client:
-            answer = await _search_searxng(
-                client,
-                query,
+        answer = await _search_searxng(
+            client,
+            query,
                 category=final_category,
                 engines=final_engines,
                 language=language,
@@ -969,8 +1091,9 @@ async def searxng_search(
         fetch_full_pages=fetch_full_pages,
         page_timeout=page_timeout,
     )
+    if answer and answer.get("results"):
+        _cache_set(f"searxng_plain:{cache_key}", answer, request_id=request_id)
     return answer
-
 
 @mcp.tool()
 async def searxng_suggestions(query: str) -> dict[str, Any]:
@@ -986,11 +1109,11 @@ async def searxng_suggestions(query: str) -> dict[str, Any]:
         return {"error": "query must be non-empty"}
     url = f"{_searxng_base_url()}/autocompleter"
     params = {"q": query.strip(), "format": "json"}
+    client = await _get_searxng_client()
     try:
-        async with httpx.AsyncClient(timeout=_SEARXNG_TIMEOUT) as client:
-            r = await client.get(url, params=params, headers={"Accept": "application/json"})
-            r.raise_for_status()
-            data = r.json()
+        r = await client.get(url, params=params, headers={"Accept": "application/json"})
+        r.raise_for_status()
+        data = r.json()
     except httpx.HTTPError as e:
         return {
             "error": f"searxng suggestions request failed: {_exc_info(e)}",
@@ -1011,7 +1134,6 @@ async def searxng_suggestions(query: str) -> dict[str, Any]:
         if isinstance(s, (str, int, float)) and str(s).strip()
     ]}
 
-
 @mcp.tool()
 async def searxng_engines() -> dict[str, Any]:
     """List the engines currently enabled on the local SearXNG instance.
@@ -1020,9 +1142,9 @@ async def searxng_engines() -> dict[str, Any]:
     and ``categories`` (list of category names SearXNG supports).
     Useful for discovering what the ``engines`` and ``category`` parameters accept.
     """
+    client = await _get_searxng_client()
     try:
-        async with httpx.AsyncClient(timeout=_SEARXNG_TIMEOUT) as client:
-            data = await _get_searxng_config(client)
+        data = await _get_searxng_config(client)
     except httpx.HTTPError as e:
         return {"error": f"searxng config request failed: {_exc_info(e)}"}
     engines_raw = data.get("engines", [])
@@ -1069,6 +1191,157 @@ async def searxng_engines() -> dict[str, Any]:
         "instance_name": data.get("instance_name", ""),
     }
 
+async def _quick_search_race(
+    query: str,
+    *,
+    category: str,
+    engines: str,
+    language: str,
+    limit: int,
+    request_id: str,
+) -> dict[str, Any]:
+    """Tiered, quota-aware search chain.
+
+    Order: SearXNG (local, unlimited) -> Ollama Cloud web search (free/paid,
+    capped) -> Tavily (paid). We move to the next tier when SearXNG genuinely
+    fails (exception / timeout / parse error), or when it returns a *silent
+    empty* response for a single-engine request (zero results with the engine
+    still marked responsive).  A valid multi-engine zero-result response is
+    still surfaced as-is because it usually means the query genuinely matches
+    nothing.
+    """
+    from homelab_mcp.tools.ollama_web_search import _search_ollama_web_with_error
+    from homelab_mcp.tools.tavily import _search_tavily_with_error
+
+    started = time.monotonic()
+
+    # --- Tier 1: SearXNG (always first, short timeout) ---
+    client = await _get_searxng_client()
+    try:
+        searxng_result = await _search_searxng(
+            client,
+            query,
+            category=category,
+            engines=engines,
+            language=language,
+            limit=limit,
+        )
+    except Exception as exc:
+        searxng_error = _exc_info(exc)
+        log.info(
+            "quick_search: SearXNG failed request_id=%s error=%s",
+            request_id,
+            searxng_error,
+        )
+        searxng_result = None
+    else:
+        searxng_error = None
+
+    if searxng_result is not None:
+        latency_ms = (time.monotonic() - started) * 1000
+        n_results = searxng_result.get("number_of_results", 0)
+        log.info(
+            "quick_search: SearXNG returned %d results request_id=%s latency_ms=%.1f",
+            n_results,
+            request_id,
+            latency_ms,
+        )
+        if _is_silent_empty_failure(searxng_result, engines):
+            searxng_error = (
+                f"silent empty from {engines}: zero results with engine still responsive"
+            )
+            log.warning(
+                "quick_search: SearXNG silent empty request_id=%s engines=%r; treating as failure",
+                request_id,
+                engines,
+            )
+        else:
+            return {**searxng_result, "source": "searxng"}
+
+    # --- Tier 2: Ollama Cloud web search (if quota available) ---
+    if is_available("ollama"):
+        try:
+            ollama_result, ollama_error = await _search_ollama_web_with_error(
+                query, limit=limit
+            )
+        except Exception as exc:
+            ollama_error = _exc_info(exc)
+            ollama_result = None
+        if ollama_result is not None and ollama_result.get("results"):
+            increment("ollama")
+            latency_ms = (time.monotonic() - started) * 1000
+            log.info(
+                "quick_search: Ollama fallback returned %d results request_id=%s latency_ms=%.1f",
+                ollama_result["number_of_results"],
+                request_id,
+                latency_ms,
+            )
+            return {
+                **ollama_result,
+                "source": "ollama",
+                "fallback_reason": f"searxng failed: {searxng_error}",
+                "searxng_unresponsive_engines": [],
+            }
+        if ollama_error:
+            if "429" in ollama_error or "quota" in ollama_error.lower() or "rate limit" in ollama_error.lower():
+                mark_exhausted("ollama")
+                log.warning(
+                    "quick_search: Ollama rate-limited/quota request_id=%s; marking exhausted for today",
+                    request_id,
+                )
+    else:
+        ollama_error = "ollama daily cap reached"
+
+    # --- Tier 3: Tavily (last resort, paid) ---
+    if is_available("tavily"):
+        try:
+            tavily_result, tavily_error = await _search_tavily_with_error(query, limit=limit)
+        except Exception as exc:
+            tavily_error = _exc_info(exc)
+            tavily_result = None
+        if tavily_result is not None and tavily_result.get("results"):
+            increment("tavily")
+            latency_ms = (time.monotonic() - started) * 1000
+            log.info(
+                "quick_search: Tavily last-resort returned %d results request_id=%s latency_ms=%.1f",
+                tavily_result["number_of_results"],
+                request_id,
+                latency_ms,
+            )
+            return {
+                **tavily_result,
+                "source": "tavily",
+                "fallback_reason": f"searxng failed: {searxng_error}; ollama failed: {ollama_error}",
+                "searxng_unresponsive_engines": [],
+            }
+    else:
+        tavily_error = "tavily daily cap reached"
+
+    # --- All tiers failed ---
+    latency_ms = (time.monotonic() - started) * 1000
+    log.error(
+        "quick_search: all tiers failed request_id=%s latency_ms=%.1f "
+        "searxng=%s ollama=%s tavily=%s",
+        request_id,
+        latency_ms,
+        searxng_error or "no result",
+        ollama_error or "no result",
+        tavily_error or "no result",
+    )
+    return {
+        "query": query,
+        "category": category,
+        "number_of_results": 0,
+        "results": [],
+        "source": "none",
+        "error": {
+            "searxng": searxng_error or "no result",
+            "ollama": ollama_error or "no result",
+            "tavily": tavily_error or "no result",
+        },
+        "suggestions": [],
+        "unresponsive_engines": [],
+    }
 
 @mcp.tool()
 async def quick_search(
@@ -1081,9 +1354,8 @@ async def quick_search(
 ) -> dict[str, Any]:
     """Run a single web search and return the top results.
 
-    Tavily is used as the primary search provider when
-    ``HOMELAB_MCP_TAVILY_API_KEY`` is configured; SearXNG is the
-    secondary/fallback provider. This is the lighter sibling of
+    SearXNG is used as the primary search provider; Tavily is the
+    fallback when SearXNG fails or times out. This is the lighter sibling of
     ``deep_search``: no query decomposition, no LLM synthesis. Use it
     when you just need current search results.
 
@@ -1112,26 +1384,61 @@ async def quick_search(
     final_category, final_engines = _maybe_override_category_engines(
         query, category=category, engines=engines
     )
-    if fetch_pages:
-        return await searxng_search(
+    request_id = uuid.uuid4().hex[:8]
+
+    # When the caller explicitly specifies engines, route directly to
+    # SearXNG — Tavily has no ``engines`` parameter and would silently
+    # discard the selection.  Same bypass as fetch_full_pages.
+    caller_specified_engines = bool(engines and engines.strip())
+    use_direct_searxng = fetch_pages or caller_specified_engines
+
+    if use_direct_searxng:
+        # If the caller gave an explicit engine list, use it verbatim; do not let
+        # _maybe_override_category_engines substitute category defaults.
+        if caller_specified_engines:
+            final_engines = engines.strip()
+            log.info("quick_search explicit engines request_id=%s engines=%r", request_id, final_engines)
+        cache_key = _plain_search_cache_key(
+            query, final_category, final_engines, language, limit, fetch_pages
+        )
+        cached = _cache_get(f"searxng_plain:{cache_key}")
+        if cached is not None:
+            log.info("quick_search plain cache hit request_id=%s", request_id)
+            return {**cached, "source": cached.get("source", "searxng"), "cached": True}
+        result = await searxng_search(
             query=query,
             category=final_category,
             engines=final_engines,
             language=language,
             limit=limit,
-            fetch_full_pages=True,
+            fetch_full_pages=fetch_pages,
         )
-    from homelab_mcp.tools.tavily import _search_primary
-    return await _search_primary(
-        query=query,
+        if result and result.get("results"):
+            _cache_set(f"searxng_plain:{cache_key}", result, request_id=request_id)
+        return result
+
+    # Race SearXNG vs Tavily for all queries so local fast path wins and
+    # Tavily acts as the fallback. This keeps latency low and Tavily credits
+    # from being burned on every call.
+    cache_key = _plain_search_cache_key(
+        query, final_category, final_engines, language, limit, False
+    )
+    cached = _cache_get(f"searxng_plain:{cache_key}")
+    if cached is not None:
+        log.info("quick_search plain cache hit request_id=%s", request_id)
+        return {**cached, "source": cached.get("source", "searxng"), "cached": True}
+    result = await _quick_search_race(
+        query,
         category=final_category,
         engines=final_engines,
         language=language,
         limit=limit,
+        request_id=request_id,
     )
+    if result and result.get("results"):
+        _cache_set(f"searxng_plain:{cache_key}", result, request_id=request_id)
+    return result
 
-
-@mcp.tool()
 async def deep_search(
     query: str,
     category: str = "",
@@ -1178,6 +1485,49 @@ async def deep_search(
         "deep_search request_id=%s query=%r engines=%r refresh=%s",
         request_id, query.strip(), engines, refresh,
     )
+    st = _Stages(
+        request_id,
+        query.strip(),
+        category=category,
+        engines=engines,
+        language=language,
+        max_subqueries=max_subqueries,
+        results_per_subquery=results_per_subquery,
+        limit=limit,
+        fetch_full_pages=fetch_full_pages,
+    )
+
+    async def _search_one(
+        query: str,
+        category: str,
+        engines: str,
+        language: str,
+        limit: int,
+        backend: str,
+        st: _Stages,
+    ) -> dict[str, Any]:
+        """Time a single subquery search and emit a per-subquery log line."""
+        t0 = time.perf_counter()
+        try:
+            if backend == "searxng":
+                return await searxng_search(
+                    query=query,
+                    category=category,
+                    engines=engines,
+                    language=language,
+                    limit=limit,
+                )
+            from homelab_mcp.tools.tavily import _search_primary
+            return await _search_primary(
+                query,
+                category=category,
+                engines=engines,
+                language=language,
+                limit=limit,
+            )
+        finally:
+            dt = time.perf_counter() - t0
+            log.info("search_subq rid=%s backend=%s dur_ms=%.1f query=%r", request_id, backend, dt * 1000, query)
 
     s = _get_settings()
     max_sub = max(1, min(10, max_subqueries or s.search_max_subqueries))
@@ -1204,12 +1554,15 @@ async def deep_search(
         limit,
         fetch_full_pages,
     )
+    t0_cache = st.start("cache_lookup")
     cached_payload = None if refresh else _cache_get(cache_key)
+    st.end("cache_lookup", t0_cache, cache_hit=cached_payload is not None)
     if cached_payload is not None:
         log.info(
             "deep_search synthesis cache hit request_id=%s key=%s model=%s full_pipeline=True",
             request_id, cache_key, curator_model,
         )
+        st.summary(cache="hit")
         return dict(cached_payload, query=query)
     log.info(
         "deep_search synthesis cache miss request_id=%s key=%s model=%s refresh=%s",
@@ -1217,11 +1570,8 @@ async def deep_search(
     )
 
     decompose_prompt = (
-        "You are a query decomposer. Break the user's question into focused web search "
-        "queries that, together, would cover all important aspects of the question. "
-        "Return ONLY a JSON object with a single key \"subqueries\" mapping to a list of "
-        "query strings. Do not include markdown, commentary, or explanation. "
-        f"Limit to {max_sub} subqueries."
+        "You are a terse query expander. Output ONLY a JSON object with key 'subqueries' "
+        "whose value is a list of 1-3 web search queries. No explanation, no markdown, no thinking."
     )
 
     decomp_cache_key = _decomposer_cache_key(query, final_category, final_engines, language, max_sub)
@@ -1238,6 +1588,7 @@ async def deep_search(
             request_id, decomp_cache_key,
         )
         try:
+            t0_decomp = st.start("decompose")
             async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as ollama_client:
                 decomp_resp = await _call_ollama(
                     ollama_client,
@@ -1247,49 +1598,49 @@ async def deep_search(
                     json_mode=True,
                     timeout=_OLLAMA_TIMEOUT,
                     request_id=request_id,
+                    extra_options={"think": False, "num_predict": 4096, "temperature": 0.0},
                 )
-        except Exception as e:
-            log.exception("deep_search decomposer failed")
-            return {
-                "error": f"decomposer failed: {_exc_info(e)}",
-                "request_id": request_id,
-                "query": query,
-                "subqueries": [],
-                "result_count": 0,
-                "results": [],
-                "routing": routing_info,
-                "synthesis": "[decomposer failed; could not generate subqueries]",
-            }
-
-        parsed = decomp_resp.get("parsed_response") or {}
-        subqueries_raw = parsed.get("subqueries", []) if isinstance(parsed, dict) else []
-        subqueries = []
-        for sq in subqueries_raw[:max_sub]:
-            text = sq.strip() if isinstance(sq, str) else str(sq).strip()
-            if text:
-                subqueries.append(text)
-        if not subqueries:
-            # Fallback: search the original question directly.
+            parsed = decomp_resp.get("parsed_response") or {}
+            subqueries_raw = parsed.get("subqueries", []) if isinstance(parsed, dict) else []
+            subqueries = []
+            for sq in subqueries_raw[:max_sub]:
+                text = sq.strip() if isinstance(sq, str) else str(sq).strip()
+                if text:
+                    subqueries.append(text)
+            if not subqueries:
+                subqueries = [query.strip()]
+            _decomposer_cache_set(decomp_cache_key, subqueries, request_id=request_id)
+            st.end("decompose", t0_decomp, model=decomposer_model, n_subqueries=len(subqueries))
+        except Exception:
+            log.exception("deep_search decomposer failed; falling back to single subquery")
             subqueries = [query.strip()]
-        _decomposer_cache_set(decomp_cache_key, subqueries, request_id=request_id)
 
     # Search all subqueries in parallel.
+    caller_specified_engines = bool(engines and engines.strip())
+    if caller_specified_engines:
+        final_engines = engines.strip()
+        log.info("deep_search explicit engines request_id=%s engines=%r", request_id, final_engines)
+
     try:
-        from homelab_mcp.tools.tavily import _search_primary
-        searches = [
-            _search_primary(
-                sq,
+        t0_search = st.start("searches")
+        backend = "searxng" if caller_specified_engines else "tavily"
+        search_coros = [
+            _search_one(
+                query=sq,
                 category=final_category,
                 engines=final_engines,
                 language=language,
                 limit=per_query,
+                st=st,
+                backend=backend,
             )
             for sq in subqueries
         ]
-        search_results = await asyncio.gather(*searches, return_exceptions=True)
+        search_results = await asyncio.gather(*search_coros, return_exceptions=True)
         for sq, sr in zip(subqueries, search_results, strict=False):
             if isinstance(sr, Exception):
                 log.warning("Deep search subquery failed: %s: %s", sq, sr)
+        st.end("searches", t0_search, n_subqueries=len(subqueries), backend=backend)
     except Exception as e:
         log.exception("deep_search search phase failed")
         return {
@@ -1307,19 +1658,21 @@ async def deep_search(
         if isinstance(sr, Exception):
             continue
         all_results.extend(sr.get("results", []))
+    t0_dedup = st.start("dedup")
     deduped = _dedup_results(all_results)
-
-    # Apply final result cap if the caller requested one.
     result_cap = max(0, min(50, int(limit)))
     if result_cap and len(deduped) > result_cap:
         deduped = deduped[:result_cap]
+    st.end("dedup", t0_dedup, n_results=len(deduped))
 
     if fetch_pages:
+        t0_fetch = st.start("page_fetch")
         deduped = await _maybe_enrich_results(
             deduped,
             fetch_full_pages=True,
             page_timeout=page_timeout,
         )
+        st.end("page_fetch", t0_fetch, n_results=len(deduped))
     # Attach routing metadata to the final response so callers can inspect it.
     if deduped and isinstance(deduped, list):
         for r in deduped:
@@ -1361,6 +1714,7 @@ async def deep_search(
     synthesis_ok = False
     synthesis = ""
     try:
+        t0_curate = st.start("curate")
         async with httpx.AsyncClient(timeout=120.0) as ollama_client:
             curator_resp = await _call_ollama(
                 ollama_client,
@@ -1373,6 +1727,7 @@ async def deep_search(
         synthesis_text = curator_resp.get("response", "")
         synthesis = synthesis_text
         synthesis_ok = bool(synthesis_text)
+        st.end("curate", t0_curate, model=curator_model)
     except Exception as e:
         synthesis = f"[curator failed: {_exc_info(e)}]"
         log.exception("deep_search curator failed")
@@ -1385,11 +1740,31 @@ async def deep_search(
         "routing": routing_info,
         "synthesis": synthesis,
     }
+    t0_cache_write = st.start("cache_write")
     if synthesis_ok:
         _cache_set(cache_key, payload, request_id=request_id)
-    else:
-        log.info(
-            "deep_search synthesis not_cached request_id=%s key=%s model=%s ok=%s",
-            request_id, cache_key, curator_model, synthesis_ok,
-        )
+    st.end("cache_write", t0_cache_write, cached=synthesis_ok)
+    st.summary(cache="miss", n_results=len(deduped), synthesis_ok=synthesis_ok)
     return payload
+
+@mcp.tool()
+async def search_quota_status() -> dict[str, Any]:
+    """Return current daily usage/caps for the tiered search providers."""
+    from homelab_mcp.tools.search_quota import all_quotas
+    return all_quotas()
+
+@mcp.tool()
+async def ollama_web_search(query: str, limit: int = 10) -> dict[str, Any]:
+    """Search the web via Ollama Cloud's web_search API.
+
+    Requires ``HOMELAB_MCP_OLLAMA_CLOUD_URL`` and
+    ``HOMELAB_MCP_OLLAMA_CLOUD_API_KEY``. Returns the same result shape
+    as ``searxng_search`` / ``tavily_search``.
+    """
+    if not query or not query.strip():
+        return {"error": "query must be non-empty"}
+    from homelab_mcp.tools.ollama_web_search import _search_ollama_web
+    result = await _search_ollama_web(query.strip(), limit=max(1, min(50, int(limit))))
+    if result is None:
+        return {"error": "Ollama web search request failed or not configured"}
+    return result

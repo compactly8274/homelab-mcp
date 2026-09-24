@@ -17,6 +17,7 @@ was sending a second http.response.start and killing the SSE stream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -68,6 +69,44 @@ class HealthAndStatusMiddleware:
         return out
 
 
+SSE_KEEPALIVE_INTERVAL = 25.0
+SSE_KEEPALIVE_BODY = b": keepalive\n\n"
+
+
+def _idle_keepalive_send(send: Any, interval: float = SSE_KEEPALIVE_INTERVAL) -> tuple[Any, Any]:
+    """Wrap an ASGI send callable so idle SSE streams receive periodic comment events."""
+    last_send = asyncio.get_event_loop().time()
+    lock = asyncio.Lock()
+    closed = False
+
+    async def wrapped_send(message: Any) -> None:
+        nonlocal last_send, closed
+        async with lock:
+            if closed:
+                return
+            last_send = asyncio.get_event_loop().time()
+            await send(message)
+            if message.get("type") == "http.response.body" and not message.get("more_body", True):
+                closed = True
+
+    async def pinger() -> None:
+        nonlocal last_send, closed
+        loop = asyncio.get_event_loop()
+        while True:
+            await asyncio.sleep(interval)
+            async with lock:
+                if closed:
+                    return
+                if loop.time() - last_send >= interval * 0.9:
+                    try:
+                        await send({"type": "http.response.body", "body": SSE_KEEPALIVE_BODY, "more_body": True})
+                        last_send = loop.time()
+                    except Exception:
+                        return
+
+    return wrapped_send, pinger
+
+
 def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
     """Build a pure-ASGI app that handles SSE/MCP plus /health + /status."""
     from mcp.server.sse import SseServerTransport  # type: ignore[import-not-found]
@@ -83,12 +122,21 @@ def build_sse_app(mcp_instance: Any, *, get_state: Any = None) -> Any:
         method = scope.get("method", "")
 
         if path == "/sse" and method == "GET":
-            async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-                await mcp_instance._mcp_server.run(
-                    read_stream,
-                    write_stream,
-                    mcp_instance._mcp_server.create_initialization_options(),
-                )
+            wrapped_send, pinger = _idle_keepalive_send(send)
+            async with sse.connect_sse(scope, receive, wrapped_send) as (read_stream, write_stream):
+                ping_task = asyncio.create_task(pinger())
+                try:
+                    await mcp_instance._mcp_server.run(
+                        read_stream,
+                        write_stream,
+                        mcp_instance._mcp_server.create_initialization_options(),
+                    )
+                finally:
+                    ping_task.cancel()
+                    try:
+                        await ping_task
+                    except asyncio.CancelledError:
+                        pass
             return
 
         if path == "/messages" and method == "POST":
@@ -115,5 +163,6 @@ def run_sse_with_health(mcp_instance: Any, *, host: str, port: int, get_state: A
         host=host,
         port=port,
         log_level=mcp_instance.settings.log_level.lower(),
+        timeout_keep_alive=0,  # never close idle SSE while pinger keeps it alive
     )
     uvicorn.Server(config).run()
