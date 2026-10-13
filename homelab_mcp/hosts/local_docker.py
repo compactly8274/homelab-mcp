@@ -89,30 +89,44 @@ class LocalDocker:
     def name(self) -> str:
         return self._name
 
-    def _ensure_client(self) -> docker.DockerClient:
+    async def _ensure_client(self) -> docker.DockerClient:
         if self._client is None:
-            self._client = docker.DockerClient(base_url=self._socket_url)
+            self._client = await asyncio.to_thread(
+                functools.partial(docker.DockerClient, base_url=self._socket_url)
+            )
         return self._client
 
     # -- containers ---------------------------------------------------------
 
     async def list_containers(self, all: bool = True) -> list[dict[str, Any]]:
-        cs = self._ensure_client().containers.list(all=all)
+        client = await self._ensure_client()
+        cs = await asyncio.to_thread(
+            functools.partial(client.containers.list, all=all)
+        )
         return [_container_to_flat_dict(c) for c in cs]
 
     async def inspect_container(self, name: str) -> dict[str, Any]:
+        client = await self._ensure_client()
         try:
-            c = self._ensure_client().containers.get(name)
+            c = await asyncio.to_thread(
+                functools.partial(client.containers.get, name)
+            )
         except NotFound as e:
             raise KeyError(f"container {name!r} not found on host {self._name}") from e
         return _safe_json(c.attrs)
 
     async def container_logs(self, name: str, tail: int = 200) -> str:
+        client = await self._ensure_client()
         try:
-            c = self._ensure_client().containers.get(name)
+            c = await asyncio.to_thread(
+                functools.partial(client.containers.get, name)
+            )
         except NotFound as e:
             raise KeyError(f"container {name!r} not found on host {self._name}") from e
-        return c.logs(tail=tail, timestamps=False).decode("utf-8", errors="replace")
+        raw = await asyncio.to_thread(
+            functools.partial(c.logs, tail=tail, timestamps=False)
+        )
+        return raw.decode("utf-8", errors="replace")
 
     async def events(self, since_seconds: int = 300) -> list[dict[str, Any]]:
         """Return docker events from the last N seconds.
@@ -145,7 +159,7 @@ class LocalDocker:
         # APIClient is a different class from DockerClient; both
         # share the same socket.
         try:
-            client = self._ensure_client()
+            client = await self._ensure_client()
             # The high-level client doesn't expose events(); use
             # the low-level APIClient on the same socket.
             api = client.api
@@ -159,12 +173,17 @@ class LocalDocker:
         import time as _time
         now = int(_time.time())
         try:
-            gen = api.events(
-                since=now - int(since_seconds),
-                until=now,
-                decode=True,
+            raw_events = await asyncio.to_thread(
+                functools.partial(
+                    list,
+                    api.events(
+                        since=now - int(since_seconds),
+                        until=now,
+                        decode=True,
+                    ),
+                )
             )
-            for ev in gen:
+            for ev in raw_events:
                 if isinstance(ev, dict):
                     out.append(ev)
                 if len(out) >= 50:  # cap so a noisy host doesn't flood
@@ -219,13 +238,16 @@ class LocalDocker:
     async def container_action(self, name: str, action: str) -> CommandResult:
         if action not in ("start", "stop", "restart", "kill", "pause", "unpause"):
             return CommandResult(2, "", f"unsupported action: {action}", 0)
+        client = await self._ensure_client()
         try:
-            c = self._ensure_client().containers.get(name)
+            c = await asyncio.to_thread(
+                functools.partial(client.containers.get, name)
+            )
         except NotFound as e:
             return CommandResult(2, "", f"container not found: {e}", 0)
         t0 = time.monotonic()
         try:
-            getattr(c, action)()
+            await asyncio.to_thread(functools.partial(getattr(c, action)))
         except APIError as e:
             return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
         return CommandResult(0, "", "", int((time.monotonic() - t0) * 1000))
@@ -240,21 +262,27 @@ class LocalDocker:
         workdir: str | None = None,
         user: str | None = None,
     ) -> CommandResult:
+        client = await self._ensure_client()
         try:
-            c = self._ensure_client().containers.get(name)
+            c = await asyncio.to_thread(
+                functools.partial(client.containers.get, name)
+            )
         except NotFound as e:
             return CommandResult(2, "", f"container not found: {e}", 0)
         t0 = time.monotonic()
         try:
             # exec_run returns (exit_code, output) where output is a generator
             # for demux=True or bytes for demux=False.
-            exit_code, output = c.exec_run(
-                command,
-                environment=env or {},
-                workdir=workdir,
-                user=user,
-                demux=False,
-                tty=False,
+            exit_code, output = await asyncio.to_thread(
+                functools.partial(
+                    c.exec_run,
+                    command,
+                    environment=env or {},
+                    workdir=workdir,
+                    user=user,
+                    demux=False,
+                    tty=False,
+                )
             )
             stdout = (output or b"").decode("utf-8", errors="replace")
             stderr = ""
@@ -291,7 +319,9 @@ class LocalDocker:
     async def read_file(self, path: str) -> str:
         """Read a file from the local host filesystem."""
         try:
-            return Path(path).read_text(encoding="utf-8")
+            return await asyncio.to_thread(
+                functools.partial(Path(path).read_text, encoding="utf-8")
+            )
         except Exception as e:
             return f"ERROR: {e}"
 
@@ -305,11 +335,14 @@ class LocalDocker:
         t0 = time.monotonic()
         try:
             p = Path(path)
-            p.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(p.parent.mkdir, parents=True, exist_ok=True)
             if "b" in mode:
-                p.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+                await asyncio.to_thread(
+                    p.write_bytes,
+                    content if isinstance(content, bytes) else content.encode("utf-8"),
+                )
             else:
-                p.write_text(content, encoding="utf-8")
+                await asyncio.to_thread(p.write_text, content, encoding="utf-8")
             return CommandResult(0, "", "", int((time.monotonic() - t0) * 1000))
         except Exception as e:
             return CommandResult(1, "", str(e), int((time.monotonic() - t0) * 1000))
@@ -335,22 +368,28 @@ class LocalDocker:
         the SDK already samples internally, so no extra sleep is added.
         """
         try:
-            client = self._ensure_client()
+            client = await self._ensure_client()
         except Exception as e:
             return {"error": f"cannot reach docker: {e}", "host": self._name}
 
         if name:
             try:
-                c = client.containers.get(name)
+                c = await asyncio.to_thread(
+                    functools.partial(client.containers.get, name)
+                )
                 targets = [c]
             except NotFound:
                 return {"error": f"container {name!r} not found on host {self._name}", "host": self._name}
         else:
-            targets = client.containers.list(all=False)
+            targets = await asyncio.to_thread(
+                functools.partial(client.containers.list, all=False)
+            )
 
         result = {"host": self._name, "containers": {}, "sample_seconds": sample_seconds}
         for c in targets:
-            stats = c.stats(stream=False)
+            stats = await asyncio.to_thread(
+                functools.partial(c.stats, stream=False)
+            )
             if not isinstance(stats, dict):
                 stats = next(iter(stats), {}) if stats else {}
             cname = (c.attrs.get("Name") or "").lstrip("/")
@@ -426,7 +465,9 @@ def _normalize_docker_stats(stats: dict[str, Any]) -> dict[str, Any]:
 
 async def _run_compose(stack_dir: str, args: list[str], timeout: int = 300) -> CommandResult:
     """Run a ``docker compose ...`` command in the given directory."""
-    if not Path(stack_dir).is_dir():
+    stack_path = Path(stack_dir)
+    is_dir = await asyncio.to_thread(stack_path.is_dir)
+    if not is_dir:
         return CommandResult(2, "", f"stack dir does not exist: {stack_dir}", 0)
     cmd = ["docker", "compose", *args]
     t0 = time.monotonic()
